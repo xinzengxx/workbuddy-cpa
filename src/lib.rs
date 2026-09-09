@@ -1,6 +1,8 @@
 pub mod auth;
 pub mod cabi;
+pub mod billing;
 pub mod executor;
+pub mod management;
 pub mod dispatch;
 pub mod models;
 pub mod rpc;
