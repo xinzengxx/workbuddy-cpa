@@ -1,4 +1,5 @@
 use crate::rpc::{b64_decode, b64_encode, ManagementRegistration, MgmtResponse};
+use serde_json::Value;
 use std::collections::HashMap;
 
 pub const PANEL_HTML: &str = include_str!("../panel.html");
@@ -71,13 +72,8 @@ fn build_accounts_dashboard() -> serde_json::Value {
     let fetched_at = time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap_or_default();
-    let files = match crate::cabi::host_call("host.auth.list", b"") {
-        Ok(raw) => match crate::rpc::parse_envelope(&raw) {
-            Ok(v) => v["files"].clone(),
-            Err(e) => {
-                return serde_json::json!({"error": format!("host.auth.list failed: {e}"), "accounts": [], "fetched_at": fetched_at})
-            }
-        },
+    let files = match list_auth_files() {
+        Ok(v) => v,
         Err(e) => {
             return serde_json::json!({"error": format!("host.auth.list failed: {e}"), "accounts": [], "fetched_at": fetched_at})
         }
@@ -86,13 +82,19 @@ fn build_accounts_dashboard() -> serde_json::Value {
     let mut accounts = Vec::new();
     if let Some(list) = files.as_array() {
         for f in list {
-            let provider = f["provider"].as_str().unwrap_or("");
-            let ftype = f["type"].as_str().unwrap_or("");
+            // HostAuthFileEntry uses snake_case json tags.
+            let provider = f.get("provider").and_then(|v| v.as_str()).unwrap_or("");
+            let ftype = f.get("type").and_then(|v| v.as_str()).unwrap_or("");
             if !provider.is_empty() && provider != PROVIDER_NAME && ftype != PROVIDER_NAME {
                 continue;
             }
-            let auth_index = f["auth_index"].as_str().unwrap_or("").to_string();
-            let name = f["name"].as_str().unwrap_or("").to_string();
+            let auth_index = f
+                .get("auth_index")
+                .or_else(|| f.get("AuthIndex"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let name = f.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
             let credits = host_auth_get(&auth_index).map_or_else(
                 |e| serde_json::json!({"error": format!("read auth failed: {e}"), "fetched_at": fetched_at}),
@@ -127,12 +129,18 @@ fn host_auth_get(auth_index: &str) -> Result<Vec<u8>, String> {
     let body = serde_json::json!({"auth_index": auth_index});
     let raw = crate::cabi::host_call("host.auth.get", body.to_string().as_bytes())?;
     let result = crate::rpc::parse_envelope(&raw)?;
-    let json_b64 = result["json"].as_str().unwrap_or("");
-    Ok(b64_decode(json_b64))
+    // Host field is json.RawMessage: marshals as RAW JSON, not base64.
+    let json_value = result
+        .get("JSON")
+        .or_else(|| result.get("json"))
+        .cloned()
+        .ok_or_else(|| "host.auth.get: missing json".to_string())?;
+    Ok(serde_json::to_vec(&json_value).map_err(|e| e.to_string())?)
 }
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     #[test]
@@ -162,4 +170,28 @@ mod tests {
     fn mgmt_unknown_path_404() {
         assert_eq!(handle("GET", "/v0/management/plugins/workbuddy/zzz", "", "").status_code, 404);
     }
+}
+
+#[allow(dead_code)]
+fn list_auth_files() -> Result<serde_json::Value, String> {
+    let raw = crate::cabi::host_call("host.auth.list", b"")?;
+    let result = crate::rpc::parse_envelope(&raw)?;
+    // The host may double-encode the result (string containing JSON) when the
+    // response struct is marshaled as an opaque value; unwrap that layer.
+    // The host can double-encode: result itself is a JSON string, or
+    // result.files is a JSON string. Unwrap whichever layer appears.
+    let unwrap_str = |v: &serde_json::Value| -> serde_json::Value {
+        match v {
+            Value::String(s) => serde_json::from_str(s).unwrap_or(Value::Null),
+            other => other.clone(),
+        }
+    };
+    let files_value = if result["files"].is_null() {
+        unwrap_str(&result)
+    } else if result["files"].is_string() {
+        unwrap_str(&result["files"])
+    } else {
+        result["files"].clone()
+    };
+    Ok(files_value)
 }
