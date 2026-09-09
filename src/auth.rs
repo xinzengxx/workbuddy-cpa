@@ -138,7 +138,7 @@ fn poll_token_once(state: &str) -> Result<TokenData, String> {
     let agent = state_agent(state)?;
     let data = get_envelope(
         &agent,
-        &format!("{UPSTREAM_BASE}{}", ENDPOINT_AUTH_TOKEN),
+        &format!("{ENDPOINT_AUTH_TOKEN}{state}"),
         common_header_set(),
     )
     .map_err(|e| e.to_string())?;
@@ -157,7 +157,7 @@ fn fetch_account_once(state: &str, bearer: &str) -> Result<AccountData, String> 
     ]);
     let data = get_envelope(
         &agent,
-        &format!("{UPSTREAM_BASE}{}", ENDPOINT_LOGIN_ACCT),
+        &format!("{ENDPOINT_LOGIN_ACCT}{state}"),
         hs,
     )
     .map_err(|e| e.to_string())?;

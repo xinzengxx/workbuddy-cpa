@@ -29,7 +29,7 @@ CPA 的 Go 插件要求宿主与插件共享包**逐字节同源**——CPA 每�
 
 ### 方式一：Release 下载（推荐）
 
-从 [Releases](../../releases) 下载对应平台 zip（如 `workbuddy_0.2.0_darwin_arm64.zip`），解压出 `workbuddy.dylib`（Linux 为 `.so`，Windows 为 `.dll`），放入 CPA 插件目录。
+从 [Releases](../../releases) 下载对应平台 zip（macOS：`workbuddy_0.2.0_darwin_arm64.zip` / `_darwin_amd64.zip`；Linux：`_linux_amd64.zip` / `_linux_arm64.zip`；Windows：`_windows_amd64.zip` / `_windows_arm64.zip`），解压出 `workbuddy.dylib`（Linux 为 `.so`，Windows 为 `.dll`），放入 CPA 插件目录。
 
 ### 方式二：CPA 插件商店
 
@@ -41,8 +41,12 @@ zip 命名与 CPA `internal/pluginstore.ArchiveName` 规范一致，CPA 面板�
 git clone <this-repo>
 cd workbuddy-cpa
 cargo build --release
-cp target/release/libworkbuddy.dylib ~/.cli-proxy-api/plugins/   # linux: *.so / windows: *.dll
+cp target/release/libworkbuddy.dylib ~/.cli-proxy-api/plugins/   # macOS: *.dylib
+cp target/release/libworkbuddy.so    ~/.cli-proxy-api/plugins/   # Linux: *.so
+cp target/release/workbuddy.dll      <CPA插件目录>/              # Windows: *.dll
 ```
+
+> Windows 注意：CPA 插件目录取配置里 `plugins.dir`（可用相对路径，如 CPA 可执行文件同目录下的 `plugins/`）。Windows 上若 CPA 由任务计划/服务方式启动，建议像 macOS 一样把 `dir` 写成绝对路径（如 `C:\path\to\plugins`），避免工作目录不确定导致找不到插件。
 
 ### 启用
 
