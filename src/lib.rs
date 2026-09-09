@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod cabi;
+pub mod executor;
 pub mod dispatch;
 pub mod models;
 pub mod rpc;
