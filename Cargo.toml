@@ -1,0 +1,19 @@
+[package]
+name = "workbuddy"
+version = "0.2.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+name = "workbuddy"
+
+[dependencies]
+ureq = { version = "2", features = ["json", "cookies"] }
+rustls = "0.23"
+rustls-native-certs = "0.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+base64 = "0.22"
+cookie_store = "0.21"
+time = { version = "0.3", features = ["formatting", "parsing"] }
