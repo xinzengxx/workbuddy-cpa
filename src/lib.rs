@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod cabi;
 pub mod dispatch;
 pub mod models;
