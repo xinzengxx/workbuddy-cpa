@@ -10,11 +10,12 @@ CPA 的 Go 插件要求宿主与插件共享包**逐字节同源**——CPA 每�
 
 ## 功能
 
-- **扫码登录 / token 刷新**：完全走 CodeBuddy 插件协议，凭据存为 `workbuddy.json`
+- **扫码登录 / token 刷新**：完全走 CodeBuddy 插件协议；默认凭据 `workbuddy.json`，**多账号**各自落在独立文件 `workbuddy-{uid后6位}.json`
+- **多账号管理**：面板内「＋ 添加账号」（扫码/授权链接 + 轮询落盘）、卡片徽章一键启停、悬停 ✕ 删除；启停与删除走宿主权威接口（见下）
 - **chat 执行**：OpenAI chat-completions 输入输出；非流式请求自动转上游流式再聚合；跨格式入口（Anthropic 等）自动补 SSE 帧
 - **系统提示词改写**：绕开 CodeBuddy 对 Claude Code 模板短语的逐字屏蔽（`official CLI` → `official CLI tool`、`Main branch` → `Default branch`）
 - **hy3 系列强制 `reasoning_effort: high`**
-- **额度面板**：CPA 管理面板内嵌 WorkBuddy 页——总积分卡片 + 各套餐包明细（剩余天数 >7 天绿 / ≤7 天红）
+- **额度面板（两区）**：上区账号配额总览卡片（剩余率进度条 + 最早到期 + 启停徽章），下区选中账号的套餐级明细表（剩余天数 >7 天绿 / ≤7 天红）
 - **配置驱动模型列表**：`cliproxyapi.conf` 中改模型列表热生效，无需重编
 
 ## 模型（内置默认表）
@@ -29,7 +30,12 @@ CPA 的 Go 插件要求宿主与插件共享包**逐字节同源**——CPA 每�
 
 ### 方式一：Release 下载（推荐）
 
-从 [Releases](../../releases) 下载对应平台 zip（macOS：`workbuddy_0.2.0_darwin_arm64.zip` / `_darwin_amd64.zip`；Linux：`_linux_amd64.zip` / `_linux_arm64.zip`；Windows：`_windows_amd64.zip` / `_windows_arm64.zip`），解压出 `workbuddy.dylib`（Linux 为 `.so`，Windows 为 `.dll`），放入 CPA 插件目录。
+从 [Releases](../../releases) 下载对应平台 zip（macOS：`workbuddy_0.3.0_darwin_arm64.zip` / `_darwin_amd64.zip`；Linux：`_linux_amd64.zip` / `_linux_arm64.zip`；Windows：`_windows_amd64.zip` / `_windows_arm64.zip`），解压出 `workbuddy.dylib`（Linux 为 `.so`，Windows 为 `.dll`），放入 CPA 插件目录。
+
+> **升级时先删旧文件再放新文件**（`rm workbuddy.dylib && cp ...`，或 `cp` 到临时名再 `mv` 覆盖）。
+> 直接 `cp` 原地覆盖一个**正被运行中的 CPA 映射**的 `.dylib`，会让 macOS 判定该文件代码签名失效，
+> 之后任何 `dlopen` 它的进程都会被 SIGKILL（崩溃报告 `CODESIGNING / Invalid Page`）。
+> 换新 inode（先删后写、或改名覆盖）即可避免；万一中招，`codesign --force --sign - workbuddy.dylib` 也能救回来。
 
 ### 方式二：CPA 插件商店
 
@@ -41,6 +47,8 @@ zip 命名与 CPA `internal/pluginstore.ArchiveName` 规范一致，CPA 面板�
 git clone <this-repo>
 cd workbuddy-cpa
 cargo build --release
+# 先删后放：避免原地覆盖正在被 CPA 映射的旧产物
+rm -f ~/.cli-proxy-api/plugins/workbuddy.dylib
 cp target/release/libworkbuddy.dylib ~/.cli-proxy-api/plugins/   # macOS: *.dylib
 cp target/release/libworkbuddy.so    ~/.cli-proxy-api/plugins/   # Linux: *.so
 cp target/release/workbuddy.dll      <CPA插件目录>/              # Windows: *.dll
@@ -60,7 +68,7 @@ plugins:
     workbuddy: { enabled: true, priority: 100 }
 ```
 
-重启 CPA，日志出现 `plugin registered plugin_id=workbuddy version=0.2.0` 即成功。然后到 CPA 面板添加 workbuddy 凭据，扫码登录 CodeBuddy。
+重启 CPA，日志出现 `plugin registered plugin_id=workbuddy version=0.3.0` 即成功。然后到 CPA 面板添加 workbuddy 凭据，扫码登录 CodeBuddy。
 
 ## 自定义模型列表
 
@@ -87,16 +95,30 @@ CPA 默认端口 `8317`，API key 见 `config.yaml` 的 `api-keys`。
 | OpenAI | `http://<host>:8317/v1` |
 | Anthropic | `http://<host>:8317`（不带 `/v1`，走 `x-api-key`） |
 
-## 额度查询
+## 额度与多账号管理
 
 面板：CPA 管理界面 → WorkBuddy 菜单。
-API：`GET /v0/management/plugins/workbuddy/accounts`（Bearer 管理密钥）。
+
+| 操作 | 位置 | 实现 |
+|---|---|---|
+| 查看各账号额度/套餐明细 | 面板两区（总览卡片 + 明细表） | `GET /v0/management/plugins/workbuddy/accounts` |
+| 添加账号 | 面板「＋ 添加账号」 | `GET .../login/start` → 展示授权链接 → `POST .../login/poll` 成功后 `host.auth.save` 落独立凭据文件 |
+| 启用 / 停用账号 | 卡片徽章点击 | 面板直接调宿主 `PATCH /v0/management/auth-files/status` |
+| 删除账号 | 卡片右上 ✕ | 面板直接调宿主 `DELETE /v0/management/auth-files` |
+
+**为什么启停/删除不走插件自己的接口**：实测（CPA v7.2.130）`host.auth.save` 不会持久化 `disabled` 字段的改写，
+且删掉凭据文件后宿主内存里仍保留该凭据——两者都必须由宿主自己的 auth-files 接口完成。
+插件因此只负责模型/执行/额度，凭据生命周期完全交还宿主。
+
+> 已知限制：CPA v7.2.130 **不会调用插件声明的 `scheduler.pick`** 钩子，多账号由宿主内置 round-robin 轮转。
+> 插件已实现完整 `pick` 协议并保留 `scheduler: true` capability，宿主未来启用该钩子即自动生效（额度感知加权随机）。
 
 ## 兼容性
 
 | 宿主 CPA | 本插件 |
 |---|---|
 | ≥ v7.2.x（C ABI v1 / RPC schema v3） | v0.2.0+ |
+| ≥ v7.2.130（`/v0/management/auth-files` 启停与删除） | v0.3.0+（需多账号管理时） |
 
 宿主升级通常无需任何操作；仅当 CPA 变更 C ABI 或 RPC 契约时才需要跟进（会发布对应新版本）。
 

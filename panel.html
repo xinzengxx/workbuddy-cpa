@@ -51,6 +51,15 @@ td.r b{font-size:13px}
 #authBox{display:none;max-width:420px}
 #authBox input{width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
 button.rf{margin:0;padding:2px 12px;font-size:11px}
+.acc .del{position:absolute;top:6px;right:8px;color:var(--dim);font-size:11px;line-height:1;padding:3px 6px;border-radius:6px;opacity:0;transition:opacity .15s;cursor:pointer}
+.acc:hover .del{opacity:1}
+.acc .del:hover{color:var(--err);background:rgba(229,83,75,.12)}
+.sec-title .tools{display:flex;gap:6px;align-items:center}
+#loginBox{display:none;max-width:560px}
+#loginBox .u{display:block;word-break:break-all;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:11.5px;margin:6px 0;color:var(--fg);text-decoration:none}
+#loginBox .u:hover{border-color:var(--ok)}
+.btn{cursor:pointer;border:1px solid var(--line);border-radius:6px;padding:2px 10px;font-size:11px;color:var(--dim);background:transparent;font-family:inherit}
+.btn:hover{filter:brightness(1.4)}
 </style>
 </head>
 <body>
@@ -60,9 +69,22 @@ button.rf{margin:0;padding:2px 12px;font-size:11px}
   <input id="keyInput" type="password" placeholder="粘贴 management key">
   <button class="refresh" onclick="saveKey()">确认</button>
 </div>
+<div id="loginBox" class="card">
+  <div class="meta" style="margin-bottom:2px">添加账号 · 用 CodeBuddy 客户端打开下面的授权链接完成登录，成功后自动保存为独立凭据文件。</div>
+  <a id="loginLink" class="u" href="#" target="_blank" rel="noopener"></a>
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <button class="btn" onclick="copyLoginUrl()">复制链接</button>
+    <button class="btn" onclick="cancelLogin()">取消</button>
+    <span id="loginStatus" class="meta"></span>
+  </div>
+</div>
 <div id="content"><div class="card meta">加载中…</div></div>
 <script>
 const API = "/v0/management/plugins/workbuddy";
+/* Credential lifecycle (enable/disable, delete) belongs to the host, which owns
+   the auth files. host.auth.save can NOT persist a `disabled` rewrite, so the
+   panel talks to the host's own auth-files endpoints (same ones its own UI uses). */
+const HOSTFL = "/v0/management/auth-files";
 /* management key acquisition: CPA localStorage → ?key= → manual input */
 const ENC_PREFIX="enc::v1::",SECRET_SALT="cli-proxy-api-webui::secure-storage",PANEL_STORE="cli-proxy-auth",SS_KEY="workbuddy-mgmt-key";
 function _enc(t){return new TextEncoder().encode(t)}
@@ -104,12 +126,17 @@ function accDisplayName(acc){
 }
 function rateColor(pct){return pct<=20?"var(--err)":pct<=50?"var(--warn)":"var(--ok)"}
 
+function zone1Title(){
+  return '<div class="sec-title"><span>① 账号配额总览（点卡片看明细 · 点徽章启停 · 悬停右上 ✕ 删除）</span>'+
+    '<span class="tools"><span class="refresh" onclick="addAccount()">＋ 添加账号</span>'+
+    '<span class="refresh" onclick="load()">↻ 全部刷新</span></span></div>';
+}
 function render(){
   const el=document.getElementById("content");
   if(!DATA)return;
   if(DATA.error){el.innerHTML='<div class="card err">'+esc(DATA.error)+'</div>';return}
   const accounts=DATA.accounts||[];
-  if(!accounts.length){el.innerHTML='<div class="card meta">暂无 workbuddy 凭据，请先在 CPA 面板扫码登录。</div>';return}
+  if(!accounts.length){el.innerHTML=zone1Title()+'<div class="card meta">暂无 workbuddy 凭据，点「＋ 添加账号」扫码登录。</div>';return}
   if(!SELECTED || !accounts.find(a=>a.auth_index===SELECTED)) SELECTED=accounts[0].auth_index;
 
   let cards="";
@@ -123,11 +150,14 @@ function render(){
       if(!earliest || String(p.cycle_end)<String(earliest.cycle_end)) earliest=p;
     }
     const earlyTxt = earliest ? "最早到期 "+fmtDate(earliest.cycle_end)+" · "+(daysLeft(earliest.cycle_end)??'?')+" 天" : (c.error?("查询失败:"+c.error):"");
-    const badgeCls = !acc.enabled ? "dis" : (c.error?"err":pct<=20?"err":pct<=50?"warn":"ok");
-    const badgeTxt = !acc.enabled ? "已停用" : (c.error?"异常":pct+"%");
+    const badgeCls = !acc.enabled ? "dis" : (acc.unavailable||c.error?"err":pct<=20?"err":pct<=50?"warn":"ok");
+    const badgeTxt = !acc.enabled ? "已停用" : (acc.unavailable?"不可用":c.error?"异常":pct+"%");
+    const label = accDisplayName(acc);
+    const fn = acc.file_name||acc.name||"";
     cards+='<div class="acc'+(acc.auth_index===SELECTED?" selected":"")+'" onclick="selectAccount(\''+esc(acc.auth_index)+'\')">'+
-      '<span class="badge '+badgeCls+'" onclick="event.stopPropagation();toggleAccount(\''+esc(acc.auth_index)+'\','+(!acc.enabled)+')">'+badgeTxt+'</span>'+
-      '<div class="nm">'+esc(accDisplayName(acc))+'</div>'+
+      (fn?'<span class="del" title="删除该账号" onclick="event.stopPropagation();deleteAccount(\''+esc(fn)+'\',\''+esc(label)+'\')">✕ 删除</span>':'')+
+      '<span class="badge '+badgeCls+'" title="点击启用/停用" onclick="event.stopPropagation();toggleAccount(\''+esc(fn)+'\','+(!acc.enabled)+')">'+badgeTxt+'</span>'+
+      '<div class="nm">'+esc(label)+'</div>'+
       '<div class="sub">'+esc(acc.name||"")+' · '+((c.pack_count)||0)+' 套餐</div>'+
       '<div class="rate"><span>总剩余率</span><b>'+pct+'%</b></div>'+
       '<div class="track"><div class="fill" style="width:'+pct+'%;background:'+color+'"></div></div>'+
@@ -156,7 +186,7 @@ function render(){
   const options=accounts.map(a=>'<option value="'+esc(a.auth_index)+'"'+(a.auth_index===SELECTED?" selected":"")+'>'+esc(accDisplayName(a))+' — '+esc(a.name||"")+'</option>').join("");
 
   el.innerHTML=
-    '<div class="sec-title"><span>① 账号配额总览（剩余率 · 点击卡片查看明细 · 点徽章启停）</span><span class="refresh" onclick="load()">↻ 全部刷新</span></div>'+
+    zone1Title()+
     '<div class="cards">'+cards+'</div>'+
     '<div class="sec-title"><span>② 账号额度明细（套餐级）</span></div>'+
     '<div class="detail-head"><select onchange="selectAccount(this.value)">'+options+'</select>'+
@@ -165,14 +195,18 @@ function render(){
 }
 function selectAccount(idx){SELECTED=idx;render()}
 function expandRows(btn){document.querySelectorAll('.xrow').forEach(r=>r.style.display='table-row');btn.remove()}
-async function toggleAccount(authIndex,enable){
-  const k=getKey();if(!k)return;
+
+/* 启停：走宿主权威接口（插件侧 host.auth.save 无法持久化 disabled） */
+async function toggleAccount(fileName,enable){
+  if(!fileName){alert("该账号没有对应的凭据文件，无法启停。");return}
+  const k=getKey();if(!k){showAuth();return}
   try{
-    const r=await fetch(API+"/toggle",{method:"POST",credentials:"omit",
+    const r=await fetch(HOSTFL+"/status",{method:"PATCH",credentials:"omit",
       headers:{"Authorization":"Bearer "+k,"Content-Type":"application/json"},
-      body:JSON.stringify({auth_index:authIndex,enabled:enable})});
-    if(r.ok){await load()}
-  }catch(e){console.error(e)}
+      body:JSON.stringify({name:fileName,disabled:!enable})});
+    if(!r.ok){alert("启停失败："+r.status+" "+await r.text());return}
+    await load();
+  }catch(e){alert("启停失败："+String(e))}
 }
 async function load(){
   const k=getKey();
@@ -184,6 +218,86 @@ async function load(){
     render();
   }catch(e){document.getElementById("content").innerHTML='<div class="card err">'+esc(String(e))+'</div>'}
 }
+
+/* ---- 多账号：新增 / 删除 ---- */
+let LOGIN=null, LOGIN_TIMER=null;
+function apiHeaders(extra){
+  const k=getKey()||"";
+  return Object.assign({"Authorization":"Bearer "+k}, extra||{});
+}
+function loginStatus(html){document.getElementById("loginStatus").innerHTML=html}
+
+async function addAccount(){
+  if(!getKey()){showAuth();return}
+  const box=document.getElementById("loginBox");
+  box.style.display="block";
+  document.getElementById("loginLink").removeAttribute("href");
+  document.getElementById("loginLink").textContent="正在申请授权链接…";
+  loginStatus('等待授权中…');
+  try{
+    const r=await fetch(API+"/login/start",{credentials:"omit",headers:apiHeaders()});
+    const d=await r.json();
+    if(d.error||!d.url){loginStatus('<span class="err">'+esc(d.error||"未返回授权链接")+'</span>');return}
+    LOGIN=d;
+    const link=document.getElementById("loginLink");
+    link.href=d.url;link.textContent=d.url;
+    loginStatus('等待授权中… 链接 5 分钟内有效');
+    clearInterval(LOGIN_TIMER);
+    LOGIN_TIMER=setInterval(pollLogin,2000);
+  }catch(e){loginStatus('<span class="err">'+esc(String(e))+'</span>')}
+}
+
+async function pollLogin(){
+  if(!LOGIN)return;
+  if(!getKey()){cancelLogin();return}
+  try{
+    const r=await fetch(API+"/login/poll",{method:"POST",credentials:"omit",
+      headers:apiHeaders({"Content-Type":"application/json"}),
+      body:JSON.stringify({state:LOGIN.state})});
+    const d=await r.json();
+    if(d.status==="success"){
+      const saved=d.saved!==false;
+      cancelLogin();
+      if(!saved){alert("登录成功，但保存凭据失败："+(d.error||""))}
+      SELECTED=null;
+      await load();
+      return;
+    }
+    if(d.status==="error"){
+      clearInterval(LOGIN_TIMER);LOGIN_TIMER=null;
+      loginStatus('<span class="err">'+esc(d.message||"登录失败")+(d.message&&d.message.indexOf("expired")>=0?"，请重新添加":"")+'</span>');
+      return;
+    }
+    loginStatus('等待授权中…');
+  }catch(e){/* 下一次轮询继续 */}
+}
+
+function copyLoginUrl(){
+  if(!LOGIN||!LOGIN.url)return;
+  if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(LOGIN.url)}
+  else{const t=document.createElement("textarea");t.value=LOGIN.url;document.body.appendChild(t);t.select();document.execCommand("copy");t.remove()}
+  loginStatus('链接已复制');
+}
+
+function cancelLogin(){
+  clearInterval(LOGIN_TIMER);LOGIN_TIMER=null;LOGIN=null;
+  document.getElementById("loginBox").style.display="none";
+}
+
+/* 删除：走宿主 auth-files 删除接口，宿主会同时清掉内存与磁盘上的凭据 */
+async function deleteAccount(fileName,label){
+  if(!getKey()){showAuth();return}
+  if(!confirm("删除账号「"+label+"」？该账号的凭据文件会被移除。"))return;
+  try{
+    const r=await fetch(HOSTFL,{method:"DELETE",credentials:"omit",
+      headers:apiHeaders({"Content-Type":"application/json"}),
+      body:JSON.stringify({names:[fileName]})});
+    if(!r.ok){alert("删除失败："+r.status+" "+await r.text());return}
+    SELECTED=null;
+    await load();
+  }catch(e){alert("删除失败："+String(e))}
+}
+
 window.addEventListener("load",load);
 </script>
 </body>

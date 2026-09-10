@@ -63,17 +63,23 @@ Rust 版，并用宿主官方的 `scheduler.pick` 插件钩子实现（无需 ha
 
 ## 三、面板与管理 API（src/management.rs、panel.html）
 
-- `GET /accounts` 响应每账号增加：`enabled`（bool）、`auth_index`、`file_name`。
-- 新增 `POST /plugins/workbuddy/toggle`：body `{"auth_index": "...", "enabled": bool}`。
-  停用名单持久化在 `~/.cli-proxy-api/workbuddy-state.json`（插件自管理：
-  `toggle` 写入、插件启动与 `pick` 时读取），`toggle` 即时更新内存名单并持久化，
-  无需重启。不采用改写宿主 conf 的方案（插件不应改写宿主配置）。
-- panel.html 重构为已确认的两区布局：
-  - 上区：账号卡片栅格（昵称/文件名/套餐数、总剩余率大字+进度条、
-    启用/停用徽章（可点击 → toggle）、最早到期提示、全部刷新按钮）。
-  - 下区：账号下拉选择 → 该账号总积分卡 + 套餐明细表（剩余天数徽章
-    >7 天绿 / ≤7 天红），纯前端切换（accounts 一次性返回全部数据）；
-    套餐行 >6 行默认折叠（显示前 6 行 + 展开按钮）。
+- `GET /accounts` 响应每账号字段：`auth_index`、`name`/`file_name`（宿主侧磁盘文件名）、`nickname`、
+  `enabled`/`disabled`（宿主权威状态）、`status`/`status_message`/`unavailable`/`failed`/`recent_requests`、`credits`。
+- 新增 `GET /plugins/workbuddy/login/start` 与 `POST /plugins/workbuddy/login/poll {state}`：
+  面板内完成「添加账号」——拿授权链接 → 轮询 → 成功后用 `host.auth.save` 按 `workbuddy-{uid6}.json` 落盘。
+- **启停与删除不在插件侧实现（2026-09-10 实测修正）**：
+  - `host.auth.save` 无法持久化 `disabled` 字段改写：返回 ok，磁盘与宿主状态均不变（反复 toggle 实测）。
+  - 直接删除凭据文件后，宿主内存仍保留该凭据（`/auth-files` 仍列出），调度会继续路由到不存在的凭据。
+  - 故面板改为直接调用宿主权威接口：
+    `PATCH /v0/management/auth-files/status {name,disabled}` 与
+    `DELETE /v0/management/auth-files {names:[...]}`（与宿主自带面板同一套）。
+  - 插件侧原 `toggle`/`delete` 路由与 `workbuddy-state.json` 停用名单写入随之移除；
+    `state.rs` 只保留 `load_disabled` 供未来 `scheduler.pick` 真正被宿主调用时使用。
+- panel.html 两区布局：
+  - 上区：账号卡片栅格（昵称/文件名/套餐数、总剩余率大字+进度条、启停徽章、最早到期提示、
+    「＋ 添加账号」与「↻ 全部刷新」、悬停显示 ✕ 删除）。
+  - 下区：账号下拉选择 → 该账号总积分卡 + 套餐明细表（剩余天数 >7 天绿 / ≤7 天红），
+    套餐行 >6 行默认折叠。
 - 凭据 `nickname` 为空时显示文件名去掉 `workbuddy-` 前缀与 `.json` 后缀。
 
 ## 四、RPC 契约（新增，与宿主逐字段对齐）
@@ -95,18 +101,27 @@ Rust 版，并用宿主官方的 `scheduler.pick` 插件钩子实现（无需 ha
     从未发送该方法；双凭据由宿主内置 round-robin 轮转，日志确认
     auth_file 在两个凭据文件间交替）。插件已实现完整 pick 响应协议并保留
     `scheduler: true` capability——宿主未来版本启用该钩子时无需改动即生效。
-    当前面板的"启用/停用"通过停用名单在 `auth.parse` 阶段返回
-    `Handled=false` 无法实现，改为依赖宿主凭据 `disabled` 字段
-    （见三的修正说明）。
+  - `host.auth.save` 不持久化 `disabled`；删除文件不等于注销凭据。
+    故启停/删除改为面板直连宿主 `/v0/management/auth-files`（见三）。
+  - **macOS 原地覆盖已映射的 dylib 会导致签名失效**：直接 `cp` 覆盖正在被
+    运行中的 CPA 映射的插件产物，后续 `dlopen` 该文件的进程被 SIGKILL
+    （崩溃报告 `CODESIGNING / Invalid Page`）。升级/重装必须换新 inode
+    （先 `rm` 再 `cp`，或 `cp` 到临时名后 `mv`）。已在 README 安装章节标注。
+  - `workbuddy-{uid6}.json` 的 uid 后 6 位理论上可碰撞（实际账号 uid 为 UUID，
+    概率可忽略）；碰撞时同文件覆盖，等价于同账号重登。
   - 加权随机在双账号下与"轮转"体感差异不大，验收以分布统计（各账号
     承接请求数比例≈额度比例）为准。
   - 停用名单文件与凭据目录并发写：单写者（management.handle），加 Mutex。
 
 ## 六、验收
 
-1. 双凭据场景（复制现有凭据文件 + 修改 uid 后 6 位伪造第二账号）：
-   `scheduler.pick` 触发、权重偏向高额度账号、耗尽账号被跳过、
-   停用账号不被选中。
-2. 重复扫码同账号 → 覆盖同文件；新账号 → 新文件。
-3. 面板：两区布局、切换账号数据同步、toggle 后总览卡徽章变化且 pick 立即生效。
-4. e2e 脚本扩展多账号断言；CI 六平台全绿；tag `v0.3.0` 发布并更新主服务。
+已完成（2026-09-10，隔离实例端口 8400 + `scripts/e2e-check.sh`，全绿）：
+
+1. 面板两区 + 「＋ 添加账号」+ 徽章启停 + ✕ 删除均可用；`accounts` 字段完整、无调试残留。
+2. 新增账号链路：`login/start` 返回授权链接、`login/poll` 正常返回 pending。
+3. 启停：`PATCH /auth-files/status` 后磁盘 `disabled` 与面板 `enabled` 一致（启用/停用双向）。
+4. 删除：`DELETE /auth-files` 后磁盘文件、宿主列表、面板列表三者同步消失。
+5. 回归：12 个模型可见、非流式与流式对话均正常。
+6. e2e 脚本已扩展多账号断言（`BASE`/`AK`/`MK_KEY` 可覆盖目标实例）。
+
+待办：CI 六平台全绿、tag `v0.3.0` 发布并更新主服务。

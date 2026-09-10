@@ -28,6 +28,11 @@ pub fn load_disabled() -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Write side of the plugin's own disabled list. Currently unused: CPA v7.2.130
+/// never calls `scheduler.pick`, and credential enable/disable is owned by the
+/// host (`PATCH /v0/management/auth-files/status`). Kept so a future host that
+/// does call the hook gets working skip semantics.
+#[allow(dead_code)]
 pub fn set_disabled(auth_index: &str, disabled: bool) -> Result<(), String> {
     let _guard = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut list: Vec<String> = load_disabled().into_iter().filter(|x| x != auth_index).collect();

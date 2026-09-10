@@ -14,6 +14,7 @@ const WEIGHT_CAP: i64 = 1_000_000;
 #[derive(Clone)]
 struct CacheEntry {
     total_remain: i64,
+    #[allow(dead_code)]
     total_size: i64,
     refreshed_at: u64,
 }

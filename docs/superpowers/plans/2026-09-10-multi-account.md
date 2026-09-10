@@ -261,3 +261,24 @@ git add -A && git commit -m "test: multi-account e2e verification"
 - [ ] **Step 1:** `Cargo.toml` version → `0.3.0`，README「功能」加多账号段落，commit + push
 - [ ] **Step 2:** `git tag v0.3.0 && git push origin v0.3.0`，CI 全绿（7 jobs），Release 6 zip + checksums.txt
 - [ ] **Step 3:** 主服务安装 release 产物，11+ 模型注册、对话实测、面板两区可见
+
+---
+
+## 实施修正（2026-09-10，与上文冲突处以本节为准）
+
+Task 1–5 已按计划落地；Task 4/5 的「启停」实现与 Task 6 的验收在实测后修正：
+
+1. **`host.auth.save` 不持久化 `disabled`**（返回 ok、磁盘与宿主状态均不变），
+   且删文件不会让宿主注销内存中的凭据。→ 面板启停/删除改为直连宿主
+   `PATCH /v0/management/auth-files/status`、`DELETE /v0/management/auth-files`；
+   插件侧 `toggle`/`delete` 路由移除（详见设计文档三、五）。
+2. **`login/poll` 的 state 走 POST body**：宿主 `management.handle` 的 query
+   并未按预期透传（实测为空），`dispatch.rs` 现同时兼容字符串/对象两种 query 形态，
+   poll 优先读 body。
+3. **面板新增**「＋ 添加账号」（本计划原未包含，Task 6 用"伪造第二账号"绕过）：
+   现在可在面板内完成扫码登录并落独立凭据文件。
+4. **安装/升级产物必须换新 inode**（先删后写或改名覆盖）：原地 `cp` 覆盖正在被
+   运行中 CPA 映射的 `.dylib` 会让 macOS 判签名失效，后续 dlopen 被 SIGKILL。
+5. Task 6 验收改为在隔离实例（8400）上跑扩展后的 `scripts/e2e-check.sh`，
+   7 项全绿；主实例（8317）v0.3.0 加载、12 模型、对话正常。
+   Task 7（CI/tag/Release）未执行。

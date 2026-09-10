@@ -110,18 +110,25 @@ pub fn handle(method: &str, request: &[u8]) -> Result<Vec<u8>, String> {
         "management.handle" => {
             let m = crate::rpc::get_field(&req, "method").and_then(|v| v.as_str()).unwrap_or("GET");
             let p = crate::rpc::get_field(&req, "path").and_then(|v| v.as_str()).unwrap_or("");
-            let q = crate::rpc::get_field(&req, "query").and_then(|v| v.as_str()).unwrap_or("");
             let body_b64 = crate::rpc::get_field(&req, "body").and_then(|v| v.as_str()).unwrap_or("");
-            // query may arrive as an object rather than string
-            let q = if q.is_empty() {
-                match req["query"].as_object() {
-                    Some(map) => &serde_json::to_string(map).unwrap_or_default(),
-                    None => "",
-                }
-            } else {
-                q
+            // The host may hand the query over as a raw string or as an object;
+            // normalise both to `k=v&k2=v2` so handlers only parse one shape.
+            let q = match crate::rpc::get_field(&req, "query") {
+                Some(serde_json::Value::String(s)) => s.clone(),
+                Some(serde_json::Value::Object(map)) => map
+                    .iter()
+                    .map(|(k, v)| {
+                        let val = v
+                            .as_str()
+                            .map(str::to_string)
+                            .unwrap_or_else(|| v.to_string());
+                        format!("{k}={val}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join("&"),
+                _ => String::new(),
             };
-            let resp: crate::rpc::MgmtResponse = crate::management::handle(m, p, q, body_b64);
+            let resp: crate::rpc::MgmtResponse = crate::management::handle(m, p, &q, body_b64);
             ok_envelope(&resp).map_err(|e| e)
         }
         _ => Ok(error_envelope("unknown_method", &format!("unknown method: {method}")).into_bytes()),
