@@ -12,7 +12,7 @@ curl -s "$B/v1/models" -H "$K" | python3 -c "
 import json,sys
 d=[m['id'] for m in json.load(sys.stdin)['data'] if m.get('owned_by')=='workbuddy']
 assert 'glm-5.3-flash' in d, d
-assert len(d)>=11, d
+assert len(d)>=12, d
 print('models OK', len(d), 'incl glm-5.3-flash')
 "
 

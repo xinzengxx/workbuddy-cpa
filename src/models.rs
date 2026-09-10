@@ -39,6 +39,7 @@ pub fn builtin_models() -> Vec<ModelInfo> {
         ("hy3-preview-agent", "Hy3 Preview Agent", 262_144),
         ("deepseek-v4-pro", "DeepSeek V4 Pro", 1_000_000),
         ("deepseek-v4-flash", "DeepSeek V4 Flash", 1_000_000),
+        ("deepseek-v4.1-flash", "DeepSeek V4.1 Flash", 1_000_000),
     ];
     specs
         .iter()
@@ -123,7 +124,7 @@ mod tests {
         assert_eq!(f.context_length, 2_000_000);
         let k3 = merged.iter().find(|m| m.id == "kimi-k3").unwrap();
         assert_eq!(k3.display_name, "Kimi K3");
-        assert_eq!(merged.len(), 12);
+        assert_eq!(merged.len(), 13);
     }
 
     #[test]
