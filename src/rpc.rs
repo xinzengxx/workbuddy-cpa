@@ -342,9 +342,12 @@ pub fn credential_file_name(sa: &StoredAuth) -> String {
 }
 
 pub fn auth_data_from_stored(sa: &StoredAuth, file_name: &str) -> AuthData {
+    // Per-account unique ID: the host dedupes auth records by AuthData.ID, so
+    // a constant ID would collapse every account into one record.
+    let id = file_name.trim_end_matches(".json").to_string();
     AuthData {
         provider: "workbuddy".into(),
-        id: "workbuddy".into(),
+        id,
         file_name: file_name.into(),
         label: "WorkBuddy".into(),
         storage_json: b64_encode(&serde_json::to_vec(sa).unwrap_or_default()),

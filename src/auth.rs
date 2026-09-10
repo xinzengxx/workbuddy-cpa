@@ -174,7 +174,7 @@ fn state_agent(state: &str) -> Result<ureq::Agent, String> {
 }
 
 /// auth.parse: recognize workbuddy credentials among auth files on disk.
-pub fn parse_auth(raw_json_b64: &str) -> AuthParseResponse {
+pub fn parse_auth(raw_json_b64: &str, req_file_name: &str) -> AuthParseResponse {
     let raw = crate::rpc::b64_decode(raw_json_b64);
     if raw.is_empty() {
         return AuthParseResponse { handled: false, auth: None };
@@ -186,7 +186,14 @@ pub fn parse_auth(raw_json_b64: &str) -> AuthParseResponse {
     if sa.auth.access_token.is_empty() {
         return AuthParseResponse { handled: false, auth: None };
     }
-    AuthParseResponse { handled: true, auth: Some(auth_data_from_stored(&sa, "workbuddy.json")) }
+    // Prefer the host-provided file name (the on-disk name); fall back to the
+    // uid-derived name so re-parses of the same account stay on one file.
+    let file_name = if req_file_name.trim().is_empty() {
+        crate::rpc::credential_file_name(&sa)
+    } else {
+        req_file_name.trim().to_string()
+    };
+    AuthParseResponse { handled: true, auth: Some(auth_data_from_stored(&sa, &file_name)) }
 }
 
 /// POST /v2/plugin/auth/token/refresh with the X-Auth-Refresh-Source marker.
@@ -229,7 +236,7 @@ mod tests {
 
     #[test]
     fn parse_auth_rejects_garbage() {
-        assert_eq!(parse_auth(&b64_encode(b"not json")).handled, false);
+        assert_eq!(parse_auth(&b64_encode(b"not json"), "").handled, false);
     }
 
     #[test]
@@ -247,7 +254,7 @@ mod tests {
                 nickname: "n".into(),
             },
         };
-        let resp = parse_auth(&b64_encode(&serde_json::to_vec(&sa).unwrap()));
+        let resp = parse_auth(&b64_encode(&serde_json::to_vec(&sa).unwrap()), "");
         assert_eq!(resp.handled, true);
         let ad = resp.auth.unwrap();
         let back: StoredAuth =

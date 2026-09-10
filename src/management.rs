@@ -173,7 +173,7 @@ fn build_accounts_dashboard() -> serde_json::Value {
             }));
         }
     }
-    serde_json::json!({"accounts": accounts, "fetched_at": fetched_at})
+    { let mut r = serde_json::json!({"accounts": accounts, "fetched_at": fetched_at}); r["_dbg_files"] = files.clone(); r }
 }
 
 fn host_auth_get(auth_index: &str) -> Result<Vec<u8>, String> {

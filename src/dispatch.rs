@@ -47,7 +47,10 @@ pub fn handle(method: &str, request: &[u8]) -> Result<Vec<u8>, String> {
             ok_envelope(&serde_json::json!({"Identifier": "workbuddy"})).map_err(|e| e)
         }
         "auth.parse" => {
-            let resp: AuthParseResponse = crate::auth::parse_auth(crate::rpc::get_field(&req, "raw_json").and_then(|v| v.as_str()).unwrap_or(""));
+            let resp: AuthParseResponse = crate::auth::parse_auth(
+            crate::rpc::get_field(&req, "raw_json").and_then(|v| v.as_str()).unwrap_or(""),
+            crate::rpc::get_field(&req, "file_name").and_then(|v| v.as_str()).unwrap_or(""),
+        );
             ok_envelope(&resp).map_err(|e| e)
         }
         "auth.login.start" => match crate::auth::start_login() {
