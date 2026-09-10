@@ -6,6 +6,8 @@ pub mod management;
 pub mod dispatch;
 pub mod models;
 pub mod rpc;
+pub mod scheduler;
+pub mod state;
 pub mod upstream;
 
 pub const ABI_VERSION: u32 = 1;

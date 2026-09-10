@@ -10,20 +10,6 @@ use std::sync::Mutex;
 /// Live model table, replaced on plugin.register / plugin.reconfigure.
 static MODELS: Mutex<Vec<crate::rpc::ModelInfo>> = Mutex::new(Vec::new());
 
-/// Go marshals untagged struct fields with their exported names (e.g. `Path`,
-/// `StorageJSON`), so key lookups must ignore case AND underscores.
-fn get_field<'a>(req: &'a serde_json::Value, name: &str) -> Option<&'a serde_json::Value> {
-    let obj = req.as_object()?;
-    if let Some(v) = obj.get(name) {
-        return Some(v);
-    }
-    let norm = |s: &str| -> String { s.chars().filter(|c| c.is_alphanumeric()).map(|c| c.to_ascii_lowercase()).collect() };
-    let target = norm(name);
-    obj.iter()
-        .find(|(k, _)| norm(k) == target)
-        .map(|(_, v)| v)
-}
-
 
 fn current_models() -> Vec<crate::rpc::ModelInfo> {
     let guard = MODELS.lock().unwrap_or_else(|e| e.into_inner());
@@ -49,7 +35,7 @@ pub fn handle(method: &str, request: &[u8]) -> Result<Vec<u8>, String> {
 
     match method {
         "plugin.register" | "plugin.reconfigure" => {
-            let config_yaml = b64_decode(get_field(&req, "config_yaml").and_then(|v| v.as_str()).unwrap_or(""));
+            let config_yaml = b64_decode(crate::rpc::get_field(&req, "config_yaml").and_then(|v| v.as_str()).unwrap_or(""));
             refresh_models(&config_yaml);
             ok_envelope(&crate::models::default_registration()).map_err(|e| e)
         }
@@ -61,7 +47,7 @@ pub fn handle(method: &str, request: &[u8]) -> Result<Vec<u8>, String> {
             ok_envelope(&serde_json::json!({"Identifier": "workbuddy"})).map_err(|e| e)
         }
         "auth.parse" => {
-            let resp: AuthParseResponse = crate::auth::parse_auth(get_field(&req, "raw_json").and_then(|v| v.as_str()).unwrap_or(""));
+            let resp: AuthParseResponse = crate::auth::parse_auth(crate::rpc::get_field(&req, "raw_json").and_then(|v| v.as_str()).unwrap_or(""));
             ok_envelope(&resp).map_err(|e| e)
         }
         "auth.login.start" => match crate::auth::start_login() {
@@ -72,7 +58,7 @@ pub fn handle(method: &str, request: &[u8]) -> Result<Vec<u8>, String> {
             Err(e) => Ok(error_envelope("plugin_error", &e).into_bytes()),
         },
         "auth.login.poll" => {
-            let state = get_field(&req, "state").and_then(|v| v.as_str()).unwrap_or("");
+            let state = crate::rpc::get_field(&req, "state").and_then(|v| v.as_str()).unwrap_or("");
             match crate::auth::poll_login(state) {
                 Ok(r) => {
                     let r: AuthLoginPollResponse = r;
@@ -81,7 +67,7 @@ pub fn handle(method: &str, request: &[u8]) -> Result<Vec<u8>, String> {
                 Err(e) => Ok(error_envelope("plugin_error", &e).into_bytes()),
             }
         }
-        "auth.refresh" => match crate::auth::refresh(get_field(&req, "storage_json").and_then(|v| v.as_str()).unwrap_or("")) {
+        "auth.refresh" => match crate::auth::refresh(crate::rpc::get_field(&req, "storage_json").and_then(|v| v.as_str()).unwrap_or("")) {
             Ok(r) => {
                 let r: AuthRefreshResponse = r;
                 ok_envelope(&r).map_err(|e| e)
@@ -99,7 +85,7 @@ pub fn handle(method: &str, request: &[u8]) -> Result<Vec<u8>, String> {
             }
         }
         "executor.execute_stream" => {
-            let stream_id = get_field(&req, "stream_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let stream_id = crate::rpc::get_field(&req, "stream_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let exec_req = decode_exec_req(&req, &stream_id)?;
             match execute_stream(&exec_req) {
                 Ok(r) => {
@@ -115,10 +101,10 @@ pub fn handle(method: &str, request: &[u8]) -> Result<Vec<u8>, String> {
         }
         "management.register" => ok_envelope(&crate::management::registration()).map_err(|e| e),
         "management.handle" => {
-            let m = get_field(&req, "method").and_then(|v| v.as_str()).unwrap_or("GET");
-            let p = get_field(&req, "path").and_then(|v| v.as_str()).unwrap_or("");
-            let q = get_field(&req, "query").and_then(|v| v.as_str()).unwrap_or("");
-            let body_b64 = get_field(&req, "body").and_then(|v| v.as_str()).unwrap_or("");
+            let m = crate::rpc::get_field(&req, "method").and_then(|v| v.as_str()).unwrap_or("GET");
+            let p = crate::rpc::get_field(&req, "path").and_then(|v| v.as_str()).unwrap_or("");
+            let q = crate::rpc::get_field(&req, "query").and_then(|v| v.as_str()).unwrap_or("");
+            let body_b64 = crate::rpc::get_field(&req, "body").and_then(|v| v.as_str()).unwrap_or("");
             // query may arrive as an object rather than string
             let q = if q.is_empty() {
                 match req["query"].as_object() {
@@ -136,10 +122,10 @@ pub fn handle(method: &str, request: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 fn decode_exec_req(req: &serde_json::Value, stream_id: &str) -> Result<ExecReq, String> {
-    let model = get_field(&req, "model").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let payload = b64_decode(get_field(&req, "payload").and_then(|v| v.as_str()).unwrap_or(""));
-    let original = b64_decode(get_field(&req, "original_request").and_then(|v| v.as_str()).unwrap_or(""));
-    let storage = b64_decode(get_field(&req, "storage_json").and_then(|v| v.as_str()).unwrap_or(""));
+    let model = crate::rpc::get_field(&req, "model").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let payload = b64_decode(crate::rpc::get_field(&req, "payload").and_then(|v| v.as_str()).unwrap_or(""));
+    let original = b64_decode(crate::rpc::get_field(&req, "original_request").and_then(|v| v.as_str()).unwrap_or(""));
+    let storage = b64_decode(crate::rpc::get_field(&req, "storage_json").and_then(|v| v.as_str()).unwrap_or(""));
     let storage: crate::rpc::StoredAuth = serde_json::from_slice(&storage)
         .map_err(|e| format!("storage_parse_error: {e}"))?;
     Ok(ExecReq {

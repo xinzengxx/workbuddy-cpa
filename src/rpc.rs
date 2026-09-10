@@ -28,6 +28,21 @@ pub fn parse_envelope(raw: &[u8]) -> Result<serde_json::Value, String> {
 // base64 helpers: Go []byte fields travel as base64 strings on both sides.
 // ---------------------------------------------------------------------------
 
+/// Case- and underscore-insensitive key lookup for host JSON payloads.
+/// Go untagged fields marshal as exported names (`StorageJSON`), while tagged
+/// fields use snake_case (`auth_index`); callers should not care which.
+pub fn get_field<'a>(req: &'a serde_json::Value, name: &str) -> Option<&'a serde_json::Value> {
+    let obj = req.as_object()?;
+    if let Some(v) = obj.get(name) {
+        return Some(v);
+    }
+    let norm = |s: &str| -> String {
+        s.chars().filter(|c| c.is_alphanumeric()).map(|c| c.to_ascii_lowercase()).collect()
+    };
+    let target = norm(name);
+    obj.iter().find(|(k, _)| norm(k) == target).map(|(_, v)| v)
+}
+
 pub fn b64_encode(b: &[u8]) -> String {
     use base64::Engine as _;
     base64::engine::general_purpose::STANDARD.encode(b)

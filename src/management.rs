@@ -1,4 +1,4 @@
-use crate::rpc::{b64_encode, ManagementRegistration, MgmtResponse};
+use crate::rpc::{b64_decode, b64_encode, ManagementRegistration, MgmtResponse};
 use serde_json::Value;
 use std::collections::HashMap;
 
