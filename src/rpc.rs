@@ -307,11 +307,29 @@ pub struct AccountData {
     pub nickname: String,
 }
 
-pub fn auth_data_from_stored(sa: &StoredAuth) -> AuthData {
+/// Per-account credential file name: workbuddy-{last 6 chars of uid}.json.
+/// Re-login of the same account lands on the same file (host overwrites by
+/// name), so repeated QR scans are idempotent. Empty uid falls back to the
+/// legacy shared name.
+pub fn credential_file_name(sa: &StoredAuth) -> String {
+    let uid = sa.account.uid.trim();
+    if uid.is_empty() {
+        return "workbuddy.json".into();
+    }
+    let chars: Vec<char> = uid.chars().collect();
+    let tail: String = if chars.len() >= 6 {
+        chars[chars.len() - 6..].iter().collect()
+    } else {
+        uid.to_string()
+    };
+    format!("workbuddy-{tail}.json")
+}
+
+pub fn auth_data_from_stored(sa: &StoredAuth, file_name: &str) -> AuthData {
     AuthData {
         provider: "workbuddy".into(),
         id: "workbuddy".into(),
-        file_name: "workbuddy.json".into(),
+        file_name: file_name.into(),
         label: "WorkBuddy".into(),
         storage_json: b64_encode(&serde_json::to_vec(sa).unwrap_or_default()),
         metadata: serde_json::json!({"type": "workbuddy"}),
@@ -372,12 +390,25 @@ mod tests {
                 nickname: "n".into(),
             },
         };
-        let ad = auth_data_from_stored(&sa);
+        let ad = auth_data_from_stored(&sa, "workbuddy.json");
         assert_eq!(b64_decode(&ad.storage_json), serde_json::to_vec(&sa).unwrap());
         assert_eq!(ad.file_name, "workbuddy.json");
         let back: StoredAuth = serde_json::from_slice(&b64_decode(&ad.storage_json)).unwrap();
         assert_eq!(back.auth.access_token, "a");
         assert_eq!(back.account.enterprise_id, "e");
+    }
+
+    #[test]
+    fn credential_file_name_rules() {
+        let mut sa = StoredAuth {
+            auth: StoredTokens { access_token: "a".into(), refresh_token: "r".into(), expires_at: 1, domain: "d".into() },
+            account: StoredAccount { uid: String::new(), enterprise_id: String::new(), nickname: String::new() },
+        };
+        assert_eq!(credential_file_name(&sa), "workbuddy.json");
+        sa.account.uid = "3a417abcdef".into();
+        assert_eq!(credential_file_name(&sa), "workbuddy-abcdef.json");
+        sa.account.uid = "abc".into();
+        assert_eq!(credential_file_name(&sa), "workbuddy-abc.json");
     }
 
     #[test]

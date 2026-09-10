@@ -130,7 +130,7 @@ pub fn poll_login(state: &str) -> Result<AuthLoginPollResponse, String> {
     Ok(AuthLoginPollResponse {
         status: "success",
         message: String::new(),
-        auth: Some(auth_data_from_stored(&sa)),
+        auth: Some(auth_data_from_stored(&sa, &crate::rpc::credential_file_name(&sa))),
     })
 }
 
@@ -186,7 +186,7 @@ pub fn parse_auth(raw_json_b64: &str) -> AuthParseResponse {
     if sa.auth.access_token.is_empty() {
         return AuthParseResponse { handled: false, auth: None };
     }
-    AuthParseResponse { handled: true, auth: Some(auth_data_from_stored(&sa)) }
+    AuthParseResponse { handled: true, auth: Some(auth_data_from_stored(&sa, "workbuddy.json")) }
 }
 
 /// POST /v2/plugin/auth/token/refresh with the X-Auth-Refresh-Source marker.
@@ -214,7 +214,7 @@ pub fn refresh(storage_json_b64: &str) -> Result<AuthRefreshResponse, String> {
         sa.auth.domain = tok.domain;
     }
     sa.auth.expires_at = (now_unix() as i64) + tok.expires_in;
-    Ok(AuthRefreshResponse { auth: auth_data_from_stored(&sa) })
+    Ok(AuthRefreshResponse { auth: auth_data_from_stored(&sa, &crate::rpc::credential_file_name(&sa)) })
 }
 
 #[cfg(test)]
