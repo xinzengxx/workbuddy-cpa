@@ -1,0 +1,47 @@
+<h2>多账号登录：配额管理设计</h2>
+<p class="subtitle">现状：插件单凭据设计（登录固定写 workbuddy.json，面板只展示一张卡）。多账号要动三处：登录、执行调度、面板。先选核心调度模型。</p>
+
+<style>
+.qa{background:#0f1115;color:#e6e9ef;border-radius:10px;padding:16px;font:13px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+.qa .row{display:flex;gap:10px;margin-bottom:10px}
+.qa .opt{flex:1;background:#171a21;border:1px solid #262b36;border-radius:10px;padding:12px 14px}
+.qa .opt h4{margin:0 0 6px;font-size:13px}
+.qa .opt .tag{display:inline-block;padding:1px 8px;border-radius:99px;font-size:10.5px;margin-bottom:6px}
+.qa .ok{background:rgba(52,195,126,.14);color:#34c37e}
+.qa .warn{background:rgba(229,162,60,.15);color:#e5a23c}
+.qa .err{background:rgba(229,83,75,.16);color:#e5534b}
+.qa .opt p{color:#8b93a3;font-size:11.5px;margin:4px 0 0}
+.qa .mono{font-family:ui-monospace,Menlo,monospace;font-size:11px;background:#0f1115;border:1px solid #262b36;border-radius:6px;padding:6px 8px;margin-top:8px;color:#c7cedb}
+</style>
+
+<div class="qa">
+  <div class="row">
+    <div class="opt">
+      <h4>A · 顺序轮转（round-robin）</h4>
+      <span class="tag warn">简单</span>
+      <p>每个请求轮流用下一个账号。实现最简单，不关心额度；某账号爆了会撞 429 后切下一个（浪费一次重试）。</p>
+      <div class="mono">req1→账号1 · req2→账号2 · req3→账号3 …</div>
+    </div>
+    <div class="opt">
+      <h4>B · 额度感知调度</h4>
+      <span class="tag ok">推荐</span>
+      <p>调度前查各账号剩余额度（复用现有计费接口，带缓存），永远选剩余最多的账号；额度耗尽的账号自动跳过。Sliverkiss 原版 scheduler_mode=credits 就是这个思路。</p>
+      <div class="mono">req→max(账号1:200, 账号2:1200, 账号3:0❌)→账号2</div>
+    </div>
+    <div class="opt">
+      <h4>C · 固定主账号 + 溢出转移</h4>
+      <span class="tag warn">折中</span>
+      <p>始终优先用「选定的主账号」，只有主账号请求失败（额度/429）才临时切到备用。可控性最强，但主账号用爆前其他账号闲置。</p>
+      <div class="mono">req→主账号 ✗429→备1 →✓（下次仍先试主）</div>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:14px">
+  <span class="label">三个方案共同的底层改造（无差异）</span>
+  <ul style="margin:6px 0 0">
+    <li><strong>登录</strong>：每次扫码生成独立凭据文件（如 <code>workbuddy-{uid或昵称}.json</code>），可多次登录叠加账号。</li>
+    <li><strong>面板</strong>：账号卡片列表化，每卡显示各自额度 + 启用/停用开关 + 设为默认（方案 C 需要）。</li>
+    <li><strong>凭据管理 API</strong>：accounts 增加 enable/disable/select 操作。</li>
+  </ul>
+</div>

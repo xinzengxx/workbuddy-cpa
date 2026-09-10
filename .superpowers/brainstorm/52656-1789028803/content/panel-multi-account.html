@@ -1,0 +1,102 @@
+<h2>多账号配额面板 v1</h2>
+<p class="subtitle">上：账号配额总览（剩余率卡片，横向比较）｜下：单账号套餐明细（下拉切换账号）。数据用两个模拟账号渲染。</p>
+
+<style>
+.wb{background:#0f1115;color:#e6e9ef;border-radius:10px;padding:16px;font:13px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+.wb .sec-title{font-size:12px;color:#8b93a3;letter-spacing:.5px;margin:4px 0 10px;display:flex;justify-content:space-between;align-items:center}
+.wb .refresh{cursor:pointer;border:1px solid #262b36;border-radius:6px;padding:1px 10px;font-size:11px;color:#8b93a3}
+/* ---- 上：账号总览卡片 ---- */
+.wb .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:18px}
+.wb .acc{background:#171a21;border:1px solid #262b36;border-radius:10px;padding:12px 14px;position:relative}
+.wb .acc .nm{font-size:13px;font-weight:600;margin-bottom:2px}
+.wb .acc .sub{color:#8b93a3;font-size:11px;margin-bottom:8px}
+.wb .acc .rate{display:flex;justify-content:space-between;font-size:11px;color:#8b93a3}
+.wb .acc .rate b{color:#e6e9ef;font-size:12.5px}
+.wb .acc .track{height:8px;border-radius:4px;background:#262b36;overflow:hidden;margin:5px 0 4px}
+.wb .acc .fill{height:100%;border-radius:4px}
+.wb .acc .foot{display:flex;justify-content:space-between;color:#8b93a3;font-size:10.5px}
+.wb .acc .badge{position:absolute;top:10px;right:10px;padding:1px 8px;border-radius:99px;font-size:10px}
+.wb .ok{background:rgba(52,195,126,.14);color:#34c37e}
+.wb .warn{background:rgba(229,162,60,.15);color:#e5a23c}
+.wb .err{background:rgba(229,83,75,.16);color:#e5534b}
+.wb .dis{background:rgba(139,147,163,.14);color:#8b93a3}
+/* ---- 下：明细 ---- */
+.wb .detail-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.wb select{background:#171a21;color:#e6e9ef;border:1px solid #262b36;border-radius:8px;padding:5px 12px;font-size:12.5px}
+.wb .total{background:#171a21;border:1px solid #262b36;border-radius:10px;padding:12px 16px;margin-bottom:10px}
+.wb .total .num{font-size:20px;font-weight:600;margin:2px 0 8px}
+.wb .total .num small{font-size:11.5px;color:#8b93a3;font-weight:400}
+.wb .total .track{height:9px;border-radius:5px;background:#262b36;overflow:hidden}
+.wb .total .fill{height:100%;border-radius:5px}
+.wb .total .cap{display:flex;justify-content:space-between;color:#8b93a3;font-size:11px;margin-top:4px}
+.wb table{width:100%;border-collapse:collapse;background:#171a21;border:1px solid #262b36;border-radius:10px;overflow:hidden;font-size:12px}
+.wb th{color:#8b93a3;font-weight:500;text-align:left;padding:8px 12px;border-bottom:1px solid #262b36;font-size:10.5px;white-space:nowrap}
+.wb td{padding:8px 12px;border-top:1px dashed #262b36;white-space:nowrap}
+.wb tr:first-child td{border-top:0}
+.wb td.r{text-align:right;font-variant-numeric:tabular-nums}
+.wb td.r b{font-size:13px}
+.wb .dim{color:#8b93a3}
+</style>
+
+<div class="mockup"><div class="mockup-body">
+<div class="wb">
+  <!-- 上方：账号配额总览 -->
+  <div class="sec-title"><span>① 账号配额总览（剩余率）</span><span class="refresh">↻ 全部刷新</span></div>
+  <div class="cards">
+    <div class="acc">
+      <span class="badge ok">启用</span>
+      <div class="nm">心远</div>
+      <div class="sub">workbuddy-心远.json · 6 套餐</div>
+      <div class="rate"><span>总剩余率</span><b>77%</b></div>
+      <div class="track"><div class="fill" style="width:77%;background:#34c37e"></div></div>
+      <div class="foot"><span>剩余 3191</span><span>最早到期 09-18 · 9 天</span></div>
+    </div>
+    <div class="acc">
+      <span class="badge ok">启用</span>
+      <div class="nm">小号A</div>
+      <div class="sub">workbuddy-小号A.json · 2 套餐</div>
+      <div class="rate"><span>总剩余率</span><b>38%</b></div>
+      <div class="track"><div class="fill" style="width:38%;background:#e5a23c"></div></div>
+      <div class="foot"><span>剩余 190</span><span>最早到期 09-12 · 3 天</span></div>
+    </div>
+    <div class="acc" style="opacity:.55">
+      <span class="badge dis">已停用</span>
+      <div class="nm">小号B</div>
+      <div class="sub">workbuddy-小号B.json · 1 套餐</div>
+      <div class="rate"><span>总剩余率</span><b>4%</b></div>
+      <div class="track"><div class="fill" style="width:4%;background:#e5534b"></div></div>
+      <div class="foot"><span>剩余 3</span><span>已耗尽 · 不参与调度</span></div>
+    </div>
+  </div>
+
+  <!-- 下方：单账号明细 -->
+  <div class="sec-title"><span>② 账号额度明细（套餐级）</span></div>
+  <div class="detail-head">
+    <select><option>心远 — workbuddy-心远.json（当前展示）</option><option>小号A — workbuddy-小号A.json</option><option>小号B — workbuddy-小号B.json</option></select>
+    <span class="dim" style="font-size:11px">快照 2026-09-10 13:50 UTC+8 · <span class="refresh">↻ 刷新本账号</span></span>
+  </div>
+  <div class="total">
+    <div class="num">3191 <small>/ 4200 credits 剩余 76.0%</small></div>
+    <div class="track"><div class="fill" style="width:76%;background:#34c37e"></div></div>
+    <div class="cap"><span>剩余 3191</span><span>已用 1009</span></div>
+  </div>
+  <table>
+    <tr><th>套餐</th><th>开始时间</th><th>到期时间</th><th>剩余天数</th><th style="text-align:right">剩余额度</th></tr>
+    <tr><td>CodeBuddy个人体验版</td><td class="dim">2026-09-01</td><td class="dim">2026-09-30</td><td><span class="badge ok">21 天</span></td><td class="r"><b>500</b> <span class="dim">/ 500</span></td></tr>
+    <tr><td>运营裂变包</td><td class="dim">2026-08-18</td><td class="dim">2026-09-18</td><td><span class="badge ok">9 天</span></td><td class="r"><b>791</b> <span class="dim">/ 1500</span></td></tr>
+    <tr><td>运营裂变包</td><td class="dim">2026-08-18</td><td class="dim">2026-09-18</td><td><span class="badge ok">9 天</span></td><td class="r"><b>100</b> <span class="dim">/ 100</span></td></tr>
+    <tr><td>拉新权益包</td><td class="dim">2026-09-09</td><td class="dim">2026-12-09</td><td><span class="badge ok">91 天</span></td><td class="r"><b>1000</b> <span class="dim">/ 1000</span></td></tr>
+    <tr><td>（可折叠展示其余 2 个包）</td><td class="dim">…</td><td class="dim">…</td><td>…</td><td class="r">…</td></tr>
+  </table>
+</div>
+</div></div>
+
+<div class="section" style="margin-top:14px">
+  <span class="label">设计要点</span>
+  <ul style="margin:6px 0 0">
+    <li>总览卡片核心指标 = <strong>总剩余率</strong>（Σ剩余 / Σ额度，与明细区口径一致），进度条颜色沿用 <30% 红 / <50% 黄；右上角「启用/停用」徽章直接控制该账号是否参与调度。</li>
+    <li>卡片副行给<strong>最早到期</strong>提示（哪个包先过期），这是多账号比单账号更关键的决策信息。</li>
+    <li>明细区切换账号后：总积分卡 + 套餐表同步刷新（前端切换，不发新请求——accounts 接口已一次性返回全部账号）。</li>
+    <li>套餐行过多时默认折叠（显示前 N 行 + 展开开关），避免长列表淹没。</li>
+  </ul>
+</div>
