@@ -74,8 +74,11 @@ pub fn handle(method: &str, path: &str, _query: &str, _body_b64: &str) -> MgmtRe
     }
 }
 
-/// Enable/disable one account's participation in scheduling.
+/// Enable/disable one account's participation in routing.
 /// Body (base64 JSON): {"auth_index": "...", "enabled": bool}
+/// Implementation: rewrite the credential file's "disabled" metadata via
+/// host.auth.save — the host's file watcher reloads the auth and its built-in
+/// selector then skips disabled credentials.
 fn handle_toggle(body_b64: &str) -> serde_json::Value {
     let body = b64_decode(body_b64);
     let req: serde_json::Value = match serde_json::from_slice(&body) {
@@ -96,10 +99,38 @@ fn handle_toggle(body_b64: &str) -> serde_json::Value {
         .or_else(|| req.get("Enabled"))
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
-    if let Err(e) = crate::state::set_disabled(&auth_index, !enabled) {
-        return serde_json::json!({"error": format!("persist failed: {e}")});
+    // Read current credential JSON (raw).
+    let raw = match crate::cabi::host_call(
+        "host.auth.get",
+        serde_json::json!({"auth_index": auth_index}).to_string().as_bytes(),
+    ) {
+        Ok(r) => r,
+        Err(e) => return serde_json::json!({"error": format!("host.auth.get failed: {e}")}),
+    };
+    let result = match crate::rpc::parse_envelope(&raw) {
+        Ok(v) => v,
+        Err(e) => return serde_json::json!({"error": format!("parse failed: {e}")}),
+    };
+    let file_name = result
+        .get("name")
+        .or_else(|| result.get("Name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let mut cred = match result
+        .get("JSON")
+        .or_else(|| result.get("json"))
+        .cloned()
+    {
+        Some(v) => v,
+        None => return serde_json::json!({"error": "missing credential json"}),
+    };
+    cred["disabled"] = serde_json::json!(!enabled);
+    let save_body = serde_json::json!({"name": file_name, "json": cred});
+    if let Err(e) = crate::cabi::host_call("host.auth.save", save_body.to_string().as_bytes()) {
+        return serde_json::json!({"error": format!("host.auth.save failed: {e}")});
     }
-    serde_json::json!({"ok": true, "auth_index": auth_index, "enabled": enabled, "disabled": crate::state::load_disabled()})
+    serde_json::json!({"ok": true, "auth_index": auth_index, "file_name": file_name, "enabled": enabled})
 }
 
 /// List every workbuddy credential the host knows about and attach a fresh
@@ -221,23 +252,13 @@ mod tests {
     }
 
     #[test]
-    fn toggle_endpoint_roundtrip() {
-        let tmp = std::env::temp_dir().join(format!("wb-state-test-{}.json", std::process::id()));
-        std::env::set_var("WORKBUDDY_STATE_FILE", &tmp);
-        let body = base64::engine::general_purpose::STANDARD.encode(br#"{"auth_index":"idx9","enabled":false}"#);
+    fn toggle_endpoint_requires_auth_index() {
+        let body = base64::engine::general_purpose::STANDARD.encode(br#"{"enabled":false}"#);
         let resp = handle("POST", "/v0/management/plugins/workbuddy/toggle", "", &body);
         assert_eq!(resp.status_code, 200);
         let out = String::from_utf8(b64_decode(&resp.body)).unwrap();
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(v["ok"], true);
-        assert_eq!(v["enabled"], false);
-        assert!(crate::state::load_disabled().contains(&"idx9".to_string()));
-        let body2 = base64::engine::general_purpose::STANDARD.encode(br#"{"auth_index":"idx9","enabled":true}"#);
-        let resp2 = handle("POST", "/v0/management/plugins/workbuddy/toggle", "", &body2);
-        assert_eq!(resp2.status_code, 200);
-        assert!(!crate::state::load_disabled().contains(&"idx9".to_string()));
-        let _ = std::fs::remove_file(&tmp);
-        std::env::remove_var("WORKBUDDY_STATE_FILE");
+        assert!(v["error"].as_str().unwrap().contains("auth_index"));
     }
 
     #[test]
