@@ -1,4 +1,6 @@
 use crate::rpc::{b64_decode, b64_encode, ManagementRegistration, MgmtResponse};
+#[cfg(test)]
+use base64::Engine as _;
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -17,6 +19,11 @@ pub fn registration() -> ManagementRegistration {
                 method: "POST",
                 path: "/plugins/workbuddy/refresh".into(),
                 description: "Force refresh credits for all accounts.".into(),
+            },
+            crate::rpc::ManagementRoute {
+                method: "POST",
+                path: "/plugins/workbuddy/toggle".into(),
+                description: "Enable or disable one account for scheduling (auth_index, enabled).".into(),
             },
         ],
         resources: vec![crate::rpc::ResourceRoute {
@@ -62,8 +69,37 @@ pub fn handle(method: &str, path: &str, _query: &str, _body_b64: &str) -> MgmtRe
         ("POST", p) if p == format!("{base}/refresh") => {
             json_response(200, build_accounts_dashboard())
         }
+        ("POST", p) if p == format!("{base}/toggle") => json_response(200, handle_toggle(_body_b64)),
         _ => json_response(404, serde_json::json!({"error": format!("not found: {path}")})),
     }
+}
+
+/// Enable/disable one account's participation in scheduling.
+/// Body (base64 JSON): {"auth_index": "...", "enabled": bool}
+fn handle_toggle(body_b64: &str) -> serde_json::Value {
+    let body = b64_decode(body_b64);
+    let req: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => return serde_json::json!({"error": format!("bad json: {e}")}),
+    };
+    let auth_index = req
+        .get("auth_index")
+        .or_else(|| req.get("AuthIndex"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if auth_index.is_empty() {
+        return serde_json::json!({"error": "auth_index is required"});
+    }
+    let enabled = req
+        .get("enabled")
+        .or_else(|| req.get("Enabled"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    if let Err(e) = crate::state::set_disabled(&auth_index, !enabled) {
+        return serde_json::json!({"error": format!("persist failed: {e}")});
+    }
+    serde_json::json!({"ok": true, "auth_index": auth_index, "enabled": enabled, "disabled": crate::state::load_disabled()})
 }
 
 /// List every workbuddy credential the host knows about and attach a fresh
@@ -108,18 +144,33 @@ fn build_accounts_dashboard() -> serde_json::Value {
                 },
             );
 
-            let nickname = credits
+            let nickname_source = credits
                 .pointer("/packages/0/name")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
+            let _ = nickname_source;
+            let display_name = name
+                .strip_prefix("workbuddy-")
+                .and_then(|s| s.strip_suffix(".json"))
+                .unwrap_or(&name)
+                .to_string();
+            let enabled = !crate::state::load_disabled().iter().any(|d| d == &auth_index);
+            // Feed the scheduler cache so the first pick after a panel visit
+            // already knows each account's quota.
+            if let Some(total_remain) = credits["total_remain"].as_i64() {
+                if credits.get("error").is_none() {
+                    crate::scheduler::refresh_quota_sync(&auth_index, &credits);
+                }
+                let _ = total_remain;
+            }
             accounts.push(serde_json::json!({
                 "auth_index": auth_index,
                 "name": name,
-                "nickname": "",
+                "nickname": display_name,
+                "enabled": enabled,
                 "credits": credits,
             }));
-            let _ = nickname;
         }
     }
     serde_json::json!({"accounts": accounts, "fetched_at": fetched_at})
@@ -164,6 +215,26 @@ mod tests {
         assert_eq!(ok2.status_code, 200);
         let bad = handle("GET", "/v0/resource/plugins/workbuddy/nope", "", "");
         assert_eq!(bad.status_code, 404);
+    }
+
+    #[test]
+    fn toggle_endpoint_roundtrip() {
+        let tmp = std::env::temp_dir().join(format!("wb-state-test-{}.json", std::process::id()));
+        std::env::set_var("WORKBUDDY_STATE_FILE", &tmp);
+        let body = base64::engine::general_purpose::STANDARD.encode(br#"{"auth_index":"idx9","enabled":false}"#);
+        let resp = handle("POST", "/v0/management/plugins/workbuddy/toggle", "", &body);
+        assert_eq!(resp.status_code, 200);
+        let out = String::from_utf8(b64_decode(&resp.body)).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["enabled"], false);
+        assert!(crate::state::load_disabled().contains(&"idx9".to_string()));
+        let body2 = base64::engine::general_purpose::STANDARD.encode(br#"{"auth_index":"idx9","enabled":true}"#);
+        let resp2 = handle("POST", "/v0/management/plugins/workbuddy/toggle", "", &body2);
+        assert_eq!(resp2.status_code, 200);
+        assert!(!crate::state::load_disabled().contains(&"idx9".to_string()));
+        let _ = std::fs::remove_file(&tmp);
+        std::env::remove_var("WORKBUDDY_STATE_FILE");
     }
 
     #[test]
