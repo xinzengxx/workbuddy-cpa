@@ -211,6 +211,9 @@ mod tests {
         assert_eq!(ok.status_code, 200);
         let body = String::from_utf8(b64_decode(&ok.body)).unwrap();
         assert!(body.contains("总积分额度"), "panel must contain v2 total card");
+        assert!(body.contains("账号配额总览"), "panel must contain zone-1 title");
+        assert!(body.contains("账号额度明细"), "panel must contain zone-2 title");
+        assert!(body.contains("toggleAccount"), "panel must call toggle API");
         let ok2 = handle("GET", "/v0/resource/plugins/workbuddy", "", "");
         assert_eq!(ok2.status_code, 200);
         let bad = handle("GET", "/v0/resource/plugins/workbuddy/nope", "", "");
