@@ -5,7 +5,7 @@ use crate::rpc::{
 use crate::upstream::{
     common_header_set, get_envelope, new_login_agent, post_envelope, shared_agent, HeaderSet,
     ENDPOINT_AUTH_STATE, ENDPOINT_AUTH_TOKEN, ENDPOINT_LOGIN_ACCT, ENDPOINT_TOKEN_REFRESH,
-    CLIENT_UA, ORIGIN, UPSTREAM_BASE,
+    CLIENT_UA, ORIGIN,
 };
 use std::collections::HashMap;
 use std::sync::Mutex;
