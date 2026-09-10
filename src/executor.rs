@@ -265,17 +265,21 @@ fn pump_upstream(body: Vec<u8>, sa: StoredAuth, stream_id: String, sse_framed: b
     let resp = match post_chat(&body, &sa) {
         Ok(r) => r,
         Err(e) => {
-            let err_json = serde_json::json!({"error": {"message": e}}).to_string();
+            // The close error is the only thing the client sees; carry the real
+            // upstream detail in it, otherwise a blocked request surfaces as a
+            // bare "upstream error" and is impossible to diagnose.
+            let detail: String = e.chars().take(300).collect();
+            let err_json = serde_json::json!({"error": {"message": detail}}).to_string();
             let _ = emit(err_json.as_bytes());
-            close(Some("upstream error"));
+            close(Some(&format!("upstream error: {detail}")));
             return;
         }
     };
     if resp.status() >= 400 {
-        let detail = resp.into_string().unwrap_or_default().chars().take(200).collect::<String>();
+        let detail = resp.into_string().unwrap_or_default().chars().take(300).collect::<String>();
         let err_json = serde_json::json!({"error": {"message": format!("upstream error: {detail}")}}).to_string();
         let _ = emit(err_json.as_bytes());
-        close(Some("upstream http error"));
+        close(Some(&format!("upstream http error: {detail}")));
         return;
     }
     for raw in read_sse_chunks(std::io::BufReader::new(resp.into_reader())) {
