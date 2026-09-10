@@ -19,6 +19,7 @@ pub fn default_registration() -> Registration {
             input_formats: vec!["chat-completions"],
             output_formats: vec!["chat-completions"],
             management_api: true,
+            scheduler: true,
         },
     }
 }

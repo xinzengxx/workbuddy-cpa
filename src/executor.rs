@@ -11,6 +11,7 @@ pub struct ExecReq {
     pub storage: StoredAuth,
     pub metadata: Value,
     pub stream_id: String,
+    pub auth_id: String,
 }
 
 // Rewrite pairs from the Go version (commit 03bc412): each is a single-word
@@ -208,6 +209,20 @@ fn collected_framed(body: &[u8], sa: &StoredAuth, sse_framed: bool) -> Result<Ve
         out.push(StreamChunk { payload: crate::rpc::b64_encode(payload.as_bytes()) });
     }
     Ok(out)
+}
+
+/// Optimistic scheduler-cache decrement from a completed response's usage.
+pub fn note_usage_from_completion(completion: &[u8], auth_id: &str) {
+    if auth_id.is_empty() {
+        return;
+    }
+    let v: Value = match serde_json::from_slice(completion) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    if let Some(tokens) = v["usage"]["total_tokens"].as_i64() {
+        crate::scheduler::note_usage(auth_id, tokens);
+    }
 }
 
 /// Read upstream SSE lines and yield cleaned JSON payloads (no [DONE], no

@@ -99,6 +99,10 @@ pub fn handle(method: &str, request: &[u8]) -> Result<Vec<u8>, String> {
             ok_envelope(&serde_json::json!({"Payload": crate::rpc::b64_encode(b"{\"input_tokens\":0}")}))
                 .map_err(|e| e)
         }
+        "scheduler.pick" => {
+            let resp = crate::scheduler::pick(&req);
+            ok_envelope(&resp).map_err(|e| e)
+        }
         "management.register" => ok_envelope(&crate::management::registration()).map_err(|e| e),
         "management.handle" => {
             let m = crate::rpc::get_field(&req, "method").and_then(|v| v.as_str()).unwrap_or("GET");
@@ -123,6 +127,11 @@ pub fn handle(method: &str, request: &[u8]) -> Result<Vec<u8>, String> {
 
 fn decode_exec_req(req: &serde_json::Value, stream_id: &str) -> Result<ExecReq, String> {
     let model = crate::rpc::get_field(&req, "model").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let auth_id = crate::rpc::get_field(&req, "auth_id")
+        .or_else(|| crate::rpc::get_field(&req, "AuthID"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let payload = b64_decode(crate::rpc::get_field(&req, "payload").and_then(|v| v.as_str()).unwrap_or(""));
     let original = b64_decode(crate::rpc::get_field(&req, "original_request").and_then(|v| v.as_str()).unwrap_or(""));
     let storage = b64_decode(crate::rpc::get_field(&req, "storage_json").and_then(|v| v.as_str()).unwrap_or(""));
@@ -135,6 +144,7 @@ fn decode_exec_req(req: &serde_json::Value, stream_id: &str) -> Result<ExecReq, 
         storage,
         metadata: req["metadata"].clone(),
         stream_id: stream_id.to_string(),
+        auth_id,
     })
 }
 

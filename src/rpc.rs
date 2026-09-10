@@ -93,6 +93,7 @@ pub struct Capabilities {
     pub output_formats: Vec<&'static str>,
     #[serde(rename = "management_api")]
     pub management_api: bool,
+    pub scheduler: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -369,6 +370,7 @@ mod tests {
             input_formats: vec!["chat-completions"],
             output_formats: vec!["chat-completions"],
             management_api: true,
+            scheduler: true,
         };
         let r = Registration {
             schema_version: 3,
@@ -386,7 +388,8 @@ mod tests {
         assert_eq!(v["result"]["schema_version"], 3);
         assert_eq!(v["result"]["capabilities"]["executor_model_scope"], "both");
         assert_eq!(v["result"]["capabilities"]["management_api"], true);
-        assert!(v["result"]["capabilities"].get("model_registrar").is_none());
+        assert_eq!(v["result"]["capabilities"]["scheduler"], true);
+    assert!(v["result"]["capabilities"].get("model_registrar").is_none());
         assert_eq!(v["result"]["metadata"]["GitHubRepository"], "https://example.invalid");
     }
 
