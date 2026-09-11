@@ -399,8 +399,9 @@ mod tests {
     }
 }
 
-#[allow(dead_code)]
-fn list_auth_files() -> Result<serde_json::Value, String> {
+/// List every auth file entry the host knows about (envelope-unwrapped).
+/// Used by the accounts dashboard and by the scheduler's ID->auth_index map.
+pub(crate) fn list_auth_files() -> Result<serde_json::Value, String> {
     let raw = crate::cabi::host_call("host.auth.list", b"")?;
     let result = crate::rpc::parse_envelope(&raw)?;
     // The host may double-encode the result (string containing JSON) when the

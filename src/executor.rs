@@ -157,6 +157,15 @@ fn post_chat(body: &[u8], sa: &StoredAuth) -> Result<ureq::Response, String> {
     })
 }
 
+/// Feed the scheduler's optimistic decrement from an extracted usage object.
+fn note_usage_from(auth_id: &str, usage: &Option<Value>) {
+    if let Some(u) = usage {
+        if let Some(t) = u["total_tokens"].as_i64() {
+            crate::scheduler::note_usage(auth_id, t);
+        }
+    }
+}
+
 /// Non-streaming client request: CodeBuddy rejects stream:false upstream
 /// (code 11101), so always stream and fold chunks into one chat.completion.
 pub fn execute(req: &ExecReq) -> Result<ExecutorExecResponse, String> {
@@ -167,6 +176,7 @@ pub fn execute(req: &ExecReq) -> Result<ExecutorExecResponse, String> {
     match &result {
         Ok(completion) => {
             let usage = crate::recent::usage_from_completion(completion);
+            note_usage_from(&req.auth_id, &usage);
             crate::recent::record_call(
                 &req.auth_id,
                 &req.storage.account.nickname,
@@ -214,6 +224,7 @@ pub fn execute_stream(req: &ExecReq) -> Result<ExecutorStreamResponse, String> {
                     .filter_map(|c| String::from_utf8(crate::rpc::b64_decode(&c.payload)).ok())
                     .collect();
                 let usage = crate::recent::usage_from_chunks(&raw);
+                note_usage_from(&req.auth_id, &usage);
                 crate::recent::record_call(
                     &req.auth_id,
                     &req.storage.account.nickname,
@@ -369,6 +380,7 @@ fn pump_upstream(
         }
     }
     let usage = crate::recent::usage_from_chunks(&raws);
+    note_usage_from(auth_id, &usage);
     crate::recent::record_call(auth_id, nickname, model, true, true, "", elapsed(), usage.as_ref());
     close(None);
 }
