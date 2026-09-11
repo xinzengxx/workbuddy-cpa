@@ -326,15 +326,17 @@ mod tests {
         assert_eq!(ok.status_code, 200);
         let body = String::from_utf8(b64_decode(&ok.body)).unwrap();
         assert!(body.contains("总积分额度"), "panel must contain v2 total card");
-        assert!(body.contains("账号配额总览"), "panel must contain zone-1 title");
-        assert!(body.contains("账号额度明细"), "panel must contain zone-2 title");
+        assert!(body.contains("点徽章启停"), "zone 1 must be a plain account list (no selection)");
+        assert!(body.contains("最近调用"), "panel must contain the recent-calls zone");
+        assert!(body.contains("recentTable"), "panel must render the recent-calls table");
+        assert!(body.contains("账号额度明细"), "panel must contain the detail zone");
+        assert!(body.contains("ddPick") && body.contains("ddPop"), "detail zone must use the custom dropdown");
+        assert!(!body.contains("<select"), "native select must be replaced by the custom dropdown");
         assert!(body.contains("addAccount"), "panel must expose the add-account flow");
         assert!(body.contains("login/start"), "panel must call the login start API");
         assert!(body.contains("login/poll"), "panel must call the login poll API");
         assert!(body.contains("deleteAccount"), "panel must expose the delete flow");
         assert!(body.contains("toggleAccount"), "panel must expose the enable/disable flow");
-        assert!(body.contains("最近调用"), "panel must contain the recent-calls zone");
-        assert!(body.contains("recentTable"), "panel must render the recent-calls table");
         // Credential lifecycle must go through the host's authoritative API,
         // not through host.auth.save (which cannot persist `disabled`).
         assert!(

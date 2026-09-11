@@ -15,7 +15,7 @@ CPA 的 Go 插件要求宿主与插件共享包**逐字节同源**——CPA 每�
 - **chat 执行**：OpenAI chat-completions 输入输出；非流式请求自动转上游流式再聚合；跨格式入口（Anthropic 等）自动补 SSE 帧
 - **系统提示词改写**：绕开 CodeBuddy 对 Claude Code 模板短语的逐字屏蔽（`official CLI` → `official CLI tool`、`Main branch` → `Default branch`）
 - **hy3 系列强制 `reasoning_effort: high`**
-- **额度面板（三区）**：上区账号配额总览卡片（剩余率进度条 + 最早到期 + 启停徽章），中区选中账号的套餐级明细表（剩余天数 >7 天绿 / ≤7 天红），下区最近 10 条调用（账号 / 模型 / token 用量 / 状态 / 耗时，存于插件内存、重启清零；CodeBuddy 不提供按次积分明细）
+- **额度面板（三区）**：① 账号列表（剩余率进度条 + 最早到期 + 启停徽章，点击徽章启停、悬停删除）；② 最近 10 条调用（账号 / 模型 / token 用量 / 状态 / 耗时，存于插件内存、重启清零）；③ 自绘下拉菜单选账号查看额度（总积分卡 + 套餐级明细表，剩余天数 >7 天绿 / ≤7 天红）。CodeBuddy 不提供按次积分明细，最近调用以 token 计
 - **配置驱动模型列表**：`cliproxyapi.conf` 中改模型列表热生效，无需重编
 
 ## 模型（内置默认表）
@@ -30,7 +30,7 @@ CPA 的 Go 插件要求宿主与插件共享包**逐字节同源**——CPA 每�
 
 ### 方式一：Release 下载（推荐）
 
-从 [Releases](../../releases) 下载对应平台 zip（macOS：`workbuddy_0.3.1_darwin_arm64.zip` / `_darwin_amd64.zip`；Linux：`_linux_amd64.zip` / `_linux_arm64.zip`；Windows：`_windows_amd64.zip` / `_windows_arm64.zip`），解压出 `workbuddy.dylib`（Linux 为 `.so`，Windows 为 `.dll`），放入 CPA 插件目录。
+从 [Releases](../../releases) 下载对应平台 zip（macOS：`workbuddy_0.3.2_darwin_arm64.zip` / `_darwin_amd64.zip`；Linux：`_linux_amd64.zip` / `_linux_arm64.zip`；Windows：`_windows_amd64.zip` / `_windows_arm64.zip`），解压出 `workbuddy.dylib`（Linux 为 `.so`，Windows 为 `.dll`），放入 CPA 插件目录。
 
 > **升级时先删旧文件再放新文件**（`rm workbuddy.dylib && cp ...`，或 `cp` 到临时名再 `mv` 覆盖）。
 > 直接 `cp` 原地覆盖一个**正被运行中的 CPA 映射**的 `.dylib`，会让 macOS 判定该文件代码签名失效，
