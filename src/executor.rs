@@ -160,10 +160,38 @@ fn post_chat(body: &[u8], sa: &StoredAuth) -> Result<ureq::Response, String> {
 /// Non-streaming client request: CodeBuddy rejects stream:false upstream
 /// (code 11101), so always stream and fold chunks into one chat.completion.
 pub fn execute(req: &ExecReq) -> Result<ExecutorExecResponse, String> {
+    let started = std::time::Instant::now();
     let body = sanitize_request(if req.payload.is_empty() { &req.original } else { &req.payload });
-    let resp = post_chat(&body, &req.storage)?;
-    let completion = aggregate_completion(std::io::BufReader::new(resp.into_reader()), &req.model)?;
-    Ok(ExecutorExecResponse {
+    let result = post_chat(&body, &req.storage)
+        .and_then(|resp| aggregate_completion(std::io::BufReader::new(resp.into_reader()), &req.model));
+    match &result {
+        Ok(completion) => {
+            let usage = crate::recent::usage_from_completion(completion);
+            crate::recent::record_call(
+                &req.auth_id,
+                &req.storage.account.nickname,
+                &req.model,
+                false,
+                true,
+                "",
+                started.elapsed().as_millis() as u64,
+                usage.as_ref(),
+            );
+        }
+        Err(e) => {
+            crate::recent::record_call(
+                &req.auth_id,
+                &req.storage.account.nickname,
+                &req.model,
+                false,
+                false,
+                e,
+                started.elapsed().as_millis() as u64,
+                None,
+            );
+        }
+    }
+    result.map(|completion| ExecutorExecResponse {
         payload: crate::rpc::b64_encode(&completion),
         headers: None,
     })
@@ -174,18 +202,55 @@ pub fn execute(req: &ExecReq) -> Result<ExecutorExecResponse, String> {
 pub fn execute_stream(req: &ExecReq) -> Result<ExecutorStreamResponse, String> {
     let sse_framed = sse_framed_for_path(&req.metadata);
     let headers = stream_headers();
+    let started = std::time::Instant::now();
 
     if req.stream_id.is_empty() {
         let body = sanitize_request(if req.payload.is_empty() { &req.original } else { &req.payload });
-        let chunks = collected_framed(&body, &req.storage, sse_framed)?;
-        return Ok(ExecutorStreamResponse { headers, chunks });
+        let result = collected_framed(&body, &req.storage, sse_framed);
+        match &result {
+            Ok(chunks) => {
+                let raw: Vec<String> = chunks
+                    .iter()
+                    .filter_map(|c| String::from_utf8(crate::rpc::b64_decode(&c.payload)).ok())
+                    .collect();
+                let usage = crate::recent::usage_from_chunks(&raw);
+                crate::recent::record_call(
+                    &req.auth_id,
+                    &req.storage.account.nickname,
+                    &req.model,
+                    true,
+                    true,
+                    "",
+                    started.elapsed().as_millis() as u64,
+                    usage.as_ref(),
+                );
+            }
+            Err(e) => {
+                crate::recent::record_call(
+                    &req.auth_id,
+                    &req.storage.account.nickname,
+                    &req.model,
+                    true,
+                    false,
+                    e,
+                    started.elapsed().as_millis() as u64,
+                    None,
+                );
+            }
+        }
+        return result.map(|chunks| ExecutorStreamResponse { headers, chunks });
     }
 
     // Async path: background pump emits via host.stream.emit.
     let body = sanitize_request(if req.payload.is_empty() { &req.original } else { &req.payload });
     let sa = req.storage.clone();
     let stream_id = req.stream_id.clone();
-    std::thread::spawn(move || pump_upstream(body, sa, stream_id, sse_framed));
+    let auth_id = req.auth_id.clone();
+    let nickname = req.storage.account.nickname.clone();
+    let model = req.model.clone();
+    std::thread::spawn(move || {
+        pump_upstream(body, sa, stream_id, sse_framed, &auth_id, &nickname, &model)
+    });
     Ok(ExecutorStreamResponse { headers, chunks: Vec::new() })
 }
 
@@ -245,8 +310,18 @@ pub fn read_sse_chunks<R: BufRead>(reader: R) -> Vec<String> {
 
 /// Background pump: emit each cleaned chunk to the host stream, then close.
 /// An emit failure (client disconnected, host closed the stream) aborts the
-/// pump so we stop reading a dead upstream.
-fn pump_upstream(body: Vec<u8>, sa: StoredAuth, stream_id: String, sse_framed: bool) {
+/// pump so we stop reading a dead upstream. Every outcome is recorded in the
+/// recent-calls ring the panel shows.
+fn pump_upstream(
+    body: Vec<u8>,
+    sa: StoredAuth,
+    stream_id: String,
+    sse_framed: bool,
+    auth_id: &str,
+    nickname: &str,
+    model: &str,
+) {
+    let started = std::time::Instant::now();
     let emit = |payload: &[u8]| -> Result<(), String> {
         let body = serde_json::json!({
             "stream_id": stream_id,
@@ -261,6 +336,7 @@ fn pump_upstream(body: Vec<u8>, sa: StoredAuth, stream_id: String, sse_framed: b
         };
         let _ = crate::cabi::host_call("host.stream.close", body.to_string().as_bytes());
     };
+    let elapsed = || started.elapsed().as_millis() as u64;
 
     let resp = match post_chat(&body, &sa) {
         Ok(r) => r,
@@ -272,6 +348,7 @@ fn pump_upstream(body: Vec<u8>, sa: StoredAuth, stream_id: String, sse_framed: b
             let err_json = serde_json::json!({"error": {"message": detail}}).to_string();
             let _ = emit(err_json.as_bytes());
             close(Some(&format!("upstream error: {detail}")));
+            crate::recent::record_call(auth_id, nickname, model, true, false, &detail, elapsed(), None);
             return;
         }
     };
@@ -280,14 +357,19 @@ fn pump_upstream(body: Vec<u8>, sa: StoredAuth, stream_id: String, sse_framed: b
         let err_json = serde_json::json!({"error": {"message": format!("upstream error: {detail}")}}).to_string();
         let _ = emit(err_json.as_bytes());
         close(Some(&format!("upstream http error: {detail}")));
+        crate::recent::record_call(auth_id, nickname, model, true, false, &detail, elapsed(), None);
         return;
     }
+    let mut raws: Vec<String> = Vec::new();
     for raw in read_sse_chunks(std::io::BufReader::new(resp.into_reader())) {
+        raws.push(raw.clone());
         let payload = if sse_framed { format!("data: {raw}") } else { raw };
         if emit(payload.as_bytes()).is_err() {
             break;
         }
     }
+    let usage = crate::recent::usage_from_chunks(&raws);
+    crate::recent::record_call(auth_id, nickname, model, true, true, "", elapsed(), usage.as_ref());
     close(None);
 }
 

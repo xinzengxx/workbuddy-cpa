@@ -27,6 +27,11 @@ pub fn registration() -> ManagementRegistration {
             },
             crate::rpc::ManagementRoute {
                 method: "GET",
+                path: "/plugins/workbuddy/recent".into(),
+                description: "Recent chat calls (last 10): account, model, token usage, status.".into(),
+            },
+            crate::rpc::ManagementRoute {
+                method: "GET",
                 path: "/plugins/workbuddy/login/start".into(),
                 description: "Start a login for an additional account; returns the authorization URL and state.".into(),
             },
@@ -76,6 +81,7 @@ pub fn handle(method: &str, path: &str, query: &str, body_b64: &str) -> MgmtResp
         ("GET", p) if p == base || p == format!("{base}/accounts") => {
             json_response(200, build_accounts_dashboard())
         }
+        ("GET", p) if p == format!("{base}/recent") => json_response(200, crate::recent::json()),
         ("POST", p) if p == format!("{base}/refresh") => {
             json_response(200, build_accounts_dashboard())
         }
@@ -300,8 +306,18 @@ mod tests {
         assert_eq!(r.routes[1].path, "/plugins/workbuddy/refresh");
         assert!(r.routes.iter().any(|x| x.path == "/plugins/workbuddy/login/start"));
         assert!(r.routes.iter().any(|x| x.path == "/plugins/workbuddy/login/poll"));
+        assert!(r.routes.iter().any(|x| x.path == "/plugins/workbuddy/recent"));
         assert_eq!(r.resources[0].menu, "WorkBuddy");
         assert_eq!(r.resources[0].path, "/panel");
+    }
+
+    #[test]
+    fn recent_route_returns_calls_array() {
+        let resp = handle("GET", "/v0/management/plugins/workbuddy/recent", "", "");
+        assert_eq!(resp.status_code, 200);
+        let v: serde_json::Value =
+            serde_json::from_str(&String::from_utf8(b64_decode(&resp.body)).unwrap()).unwrap();
+        assert!(v["calls"].is_array());
     }
 
     #[test]
@@ -317,6 +333,8 @@ mod tests {
         assert!(body.contains("login/poll"), "panel must call the login poll API");
         assert!(body.contains("deleteAccount"), "panel must expose the delete flow");
         assert!(body.contains("toggleAccount"), "panel must expose the enable/disable flow");
+        assert!(body.contains("最近调用"), "panel must contain the recent-calls zone");
+        assert!(body.contains("recentTable"), "panel must render the recent-calls table");
         // Credential lifecycle must go through the host's authoritative API,
         // not through host.auth.save (which cannot persist `disabled`).
         assert!(
