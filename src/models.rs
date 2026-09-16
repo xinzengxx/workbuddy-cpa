@@ -34,6 +34,8 @@ pub fn builtin_models() -> Vec<ModelInfo> {
         ("glm-5.1", "GLM-5.1", 131_072),
         ("glm-5v-turbo", "GLM-5V Turbo", 131_072),
         ("kimi-k2.7", "Kimi K2.7", 262_144),
+        ("kimi-k3", "Kimi K3", 262_144),
+        ("glm-5.3", "GLM-5.3", 131_072),
         ("minimax-m3-pay", "MiniMax M3", 204_800),
         ("hy3", "Hy3", 262_144),
         ("hy3-preview", "Hy3 Preview", 262_144),
@@ -125,7 +127,7 @@ mod tests {
         assert_eq!(f.context_length, 2_000_000);
         let k3 = merged.iter().find(|m| m.id == "kimi-k3").unwrap();
         assert_eq!(k3.display_name, "Kimi K3");
-        assert_eq!(merged.len(), 13);
+        assert_eq!(merged.len(), 14);
     }
 
     #[test]
