@@ -1,5 +1,6 @@
 use crate::rpc::StoredAuth;
 use std::sync::OnceLock;
+use std::time::Duration;
 
 pub const UPSTREAM_BASE: &str = "https://copilot.tencent.com";
 pub const CLIENT_UA: &str = "CLI/2.63.2 CodeBuddy/2.63.2";
@@ -57,12 +58,29 @@ pub fn new_login_agent() -> ureq::Agent {
 fn build_agent() -> Result<ureq::Agent, String> {
     let tls = tls_config()?;
     let store = cookie_store::CookieStore::new(None);
+    // IMPORTANT: no agent-level overall `.timeout()`. In ureq 2.x that caps
+    // the WHOLE request including reading the response body, which severed
+    // chat SSE streams at 120s mid-generation (the "deep thinking dies at
+    // ~2 minutes" bug). Bounds are instead: connect timeout + per-read idle
+    // timeout, so a stream lives as long as upstream keeps sending data.
     Ok(ureq::AgentBuilder::new()
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout_connect(CONNECT_TIMEOUT)
+        .timeout_read(IDLE_READ_TIMEOUT)
         .tls_config(std::sync::Arc::new(tls))
         .cookie_store(store)
         .build())
 }
+
+/// Fail fast on unreachable upstreams (default 30s, made explicit).
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+/// Per-read idle timeout: a healthy SSE stream emits chunks far more often
+/// than this, so only a truly stalled upstream trips it (self-heals instead
+/// of blocking the pump thread forever).
+pub const IDLE_READ_TIMEOUT: Duration = Duration::from_secs(600);
+/// Overall cap for the small JSON envelope endpoints (auth state, login
+/// polling, token refresh, billing). Chat streaming deliberately gets NO
+/// overall timeout — see build_agent.
+pub const ENVELOPE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Ordered header bag so tests can assert exact X-No-* branching.
 pub struct HeaderSet(pub Vec<(String, String)>);
@@ -128,7 +146,7 @@ pub fn post_envelope(
     body: &str,
 ) -> Result<serde_json::Value, UpstreamError> {
     let url = format!("{UPSTREAM_BASE}{path}");
-    let req = headers.apply_to(agent.post(&url));
+    let req = headers.apply_to(agent.post(&url).timeout(ENVELOPE_TIMEOUT));
     let resp = req.send_string(body).map_err(|e| match e {
         ureq::Error::Status(s, _) => UpstreamError::Http(s),
         other => UpstreamError::Transport(other.to_string()),
@@ -154,7 +172,7 @@ pub fn get_envelope(
     headers: HeaderSet,
 ) -> Result<serde_json::Value, UpstreamError> {
     let url = format!("{UPSTREAM_BASE}{path}");
-    let req = headers.apply_to(agent.get(&url));
+    let req = headers.apply_to(agent.get(&url).timeout(ENVELOPE_TIMEOUT));
     let resp = req.call().map_err(|e| match e {
         ureq::Error::Status(s, _) => UpstreamError::Http(s),
         other => UpstreamError::Transport(other.to_string()),
@@ -232,6 +250,96 @@ mod tests {
         let hs = common_header_set();
         assert!(hs.0.iter().any(|(k, v)| k == "User-Agent" && v == CLIENT_UA));
         assert!(hs.0.iter().any(|(k, v)| k == "Origin" && v == ORIGIN));
+    }
+
+    /// Pins ureq 2.x semantics that justify the agent config: an overall
+    /// `.timeout()` caps the whole request INCLUDING reading the body, so it
+    /// kills a slow-but-flowing SSE stream mid-flight. Never add one to the
+    /// shared agent again.
+    #[test]
+    fn agent_overall_timeout_cuts_midstream_reads() {
+        use std::io::{BufRead, Read, Write};
+        use std::net::TcpListener;
+        use std::time::{Duration, Instant};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = conn.read(&mut buf);
+            let _ = conn.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+            );
+            for i in 0..8 {
+                if conn
+                    .write_all(format!("data: {i}\n\n").as_bytes())
+                    .and_then(|_| conn.flush())
+                    .is_err()
+                {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(300));
+            }
+        });
+
+        let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(1)).build();
+        let started = Instant::now();
+        let resp = agent.post(&format!("http://{addr}/")).send_string("").unwrap();
+        let mut n = 0;
+        for line in std::io::BufReader::new(resp.into_reader()).lines().map_while(Result::ok) {
+            if line.starts_with("data:") {
+                n += 1;
+            }
+        }
+        let took = started.elapsed();
+        assert!(
+            n < 8,
+            "overall timeout must cut a slow-but-flowing stream mid-flight, got all {n} chunks"
+        );
+        assert!(took < Duration::from_millis(2300), "died too late: {took:?}");
+    }
+
+    /// The new agent shape (connect + per-read idle timeout, no overall cap)
+    /// lets a stream outlive any wall-clock bound as long as data keeps flowing.
+    #[test]
+    fn connect_and_idle_timeouts_allow_long_flowing_streams() {
+        use std::io::{BufRead, Read, Write};
+        use std::net::TcpListener;
+        use std::time::Duration;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = conn.read(&mut buf);
+            let _ = conn.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+            );
+            for i in 0..6 {
+                if conn
+                    .write_all(format!("data: {i}\n\n").as_bytes())
+                    .and_then(|_| conn.flush())
+                    .is_err()
+                {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        });
+
+        let agent = ureq::AgentBuilder::new()
+            .timeout_connect(CONNECT_TIMEOUT)
+            .timeout_read(IDLE_READ_TIMEOUT)
+            .build();
+        let resp = agent.post(&format!("http://{addr}/")).send_string("").unwrap();
+        let n = std::io::BufReader::new(resp.into_reader())
+            .lines()
+            .map_while(Result::ok)
+            .filter(|l| l.starts_with("data:"))
+            .count();
+        assert_eq!(n, 6, "idle-read timeout must not cut a flowing stream");
     }
 
     /// Real-network smoke test: must reach the upstream over TLS. Any HTTP

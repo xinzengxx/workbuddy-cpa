@@ -275,13 +275,10 @@ fn stream_headers() -> std::collections::HashMap<String, Vec<String>> {
 
 fn collected_framed(body: &[u8], sa: &StoredAuth, sse_framed: bool) -> Result<Vec<StreamChunk>, String> {
     let resp = post_chat(body, sa)?;
+    let chunks = read_sse_chunks(std::io::BufReader::new(resp.into_reader()))?;
     let mut out = Vec::new();
-    for raw in read_sse_chunks(std::io::BufReader::new(resp.into_reader())) {
-        let cleaned = clean_chunk_json(&raw);
-        if cleaned.is_empty() {
-            continue;
-        }
-        let payload = if sse_framed { format!("data: {cleaned}") } else { cleaned };
+    for raw in chunks {
+        let payload = if sse_framed { format!("data: {raw}") } else { raw };
         out.push(StreamChunk { payload: crate::rpc::b64_encode(payload.as_bytes()) });
     }
     Ok(out)
@@ -301,22 +298,34 @@ pub fn note_usage_from_completion(completion: &[u8], auth_id: &str) {
     }
 }
 
-/// Read upstream SSE lines and yield cleaned JSON payloads (no [DONE], no
-/// data: prefix, empty-delta fields stripped).
-pub fn read_sse_chunks<R: BufRead>(reader: R) -> Vec<String> {
-    let mut out = Vec::new();
-    for line in reader.lines().map_while(Result::ok) {
-        let content = strip_data_prefix(&line);
-        if content.is_empty() || content == "[DONE]" {
-            continue;
-        }
-        let cleaned = clean_chunk_json(&content);
-        if cleaned.is_empty() {
-            continue;
-        }
-        out.push(cleaned);
+/// Decode one raw SSE line into a cleaned JSON payload (no [DONE], no data:
+/// prefix, empty-delta fields stripped). None = skip the line.
+fn decode_sse_line(line: &str) -> Option<String> {
+    let content = strip_data_prefix(line);
+    if content.is_empty() || content == "[DONE]" {
+        return None;
     }
-    out
+    let cleaned = clean_chunk_json(&content);
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned)
+    }
+}
+
+/// Read upstream SSE lines and yield cleaned JSON payloads (no [DONE], no
+/// data: prefix, empty-delta fields stripped). A transport error mid-stream
+/// is an Err — never swallow it as a silent truncation (that used to make
+/// client-visible streams just "end" with no error and no finish_reason).
+pub fn read_sse_chunks<R: BufRead>(reader: R) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    for line in reader.lines() {
+        let line = line.map_err(|e| format!("stream read: {e}"))?;
+        if let Some(cleaned) = decode_sse_line(&line) {
+            out.push(cleaned);
+        }
+    }
+    Ok(out)
 }
 
 /// Background pump: emit each cleaned chunk to the host stream, then close.
@@ -372,12 +381,35 @@ fn pump_upstream(
         return;
     }
     let mut raws: Vec<String> = Vec::new();
-    for raw in read_sse_chunks(std::io::BufReader::new(resp.into_reader())) {
-        raws.push(raw.clone());
-        let payload = if sse_framed { format!("data: {raw}") } else { raw };
-        if emit(payload.as_bytes()).is_err() {
-            break;
+    let mut stream_err: Option<String> = None;
+    let mut reader = std::io::BufReader::new(resp.into_reader());
+    loop {
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) => break, // clean EOF
+            Ok(_) => {
+                if let Some(cleaned) = decode_sse_line(&line) {
+                    raws.push(cleaned.clone());
+                    let payload = if sse_framed { format!("data: {cleaned}") } else { cleaned };
+                    if emit(payload.as_bytes()).is_err() {
+                        break; // client disconnected; stop pumping a dead stream
+                    }
+                }
+            }
+            Err(e) => {
+                // Transport error mid-stream (upstream died / idle timeout).
+                // Surface it: the close error is the only thing the client sees.
+                stream_err = Some(format!("stream read: {e}"));
+                break;
+            }
         }
+    }
+    if let Some(e) = stream_err {
+        let err_json = serde_json::json!({"error": {"message": e}}).to_string();
+        let _ = emit(err_json.as_bytes());
+        close(Some(&format!("upstream error: {e}")));
+        crate::recent::record_call(auth_id, nickname, model, true, false, &e, elapsed(), None);
+        return;
     }
     let usage = crate::recent::usage_from_chunks(&raws);
     note_usage_from(auth_id, &usage);
@@ -397,7 +429,7 @@ pub fn aggregate_completion<R: BufRead>(reader: R, model: &str) -> Result<Vec<u8
     let mut usage: Option<Value> = None;
     let mut tool_calls: Vec<Value> = Vec::new();
 
-    for raw in read_sse_chunks(reader) {
+    for raw in read_sse_chunks(reader)? {
         let chunk: Value = match serde_json::from_str(&raw) {
             Ok(v) => v,
             Err(_) => continue,
