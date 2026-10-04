@@ -152,7 +152,10 @@ fn decode_exec_req(req: &serde_json::Value, stream_id: &str) -> Result<ExecReq, 
         payload,
         original,
         storage,
-        metadata: req["metadata"].clone(),
+        // The host sends the map as "Metadata" (PascalCase wire format); a
+        // direct req["metadata"] index is case-sensitive and always missed,
+        // leaving metadata null (which broke SSE framing detection).
+        metadata: crate::rpc::get_field(req, "metadata").cloned().unwrap_or(serde_json::Value::Null),
         stream_id: stream_id.to_string(),
         auth_id,
     })
