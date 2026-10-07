@@ -60,7 +60,11 @@ cp target/release/workbuddy.dll      <CPA插件目录>/workbuddy-cpa.dll        
 
 > Windows 注意：CPA 插件目录取配置里 `plugins.dir`（可用相对路径，如 CPA 可执行文件同目录下的 `plugins/`）。Windows 上若 CPA 由任务计划/服务方式启动，建议像 macOS 一样把 `dir` 写成绝对路径（如 `C:\path\to\plugins`），避免工作目录不确定导致找不到插件。
 
-### 启用
+### 启用（首次安装必做，否则面板显示"已识别但未注册/未生效"）
+
+CPA 对插件**默认全部禁用**：全局 `plugins.enabled` 缺省 `false`，且 `configs` 里没有条目的插件
+一律不加载（`enabled` 缺省 `false`）——所以只把 dll 丢进插件目录，面板能"识别到文件"，但状态是
+未注册、未生效。`configs` 的键必须与**插件文件名（去扩展名）**一致，即 `workbuddy-cpa`。
 
 `cliproxyapi.conf`：
 
@@ -69,17 +73,26 @@ plugins:
   enabled: true
   dir: "~/.cli-proxy-api/plugins"     # brew launchd 服务必须用绝对路径
   configs:
-    workbuddy: { enabled: true, priority: 100 }
+    workbuddy-cpa: { enabled: true, priority: 100 }
 ```
 
-重启 CPA，日志出现 `plugin registered plugin_id=workbuddy version=0.3.0` 即成功。然后到 CPA 面板添加 workbuddy 凭据，扫码登录 CodeBuddy。
+或者更简单：重启后在 CPA 管理面板 → 插件页，对 workbuddy-cpa 点**启用**（会自动写入配置并热加载，无需重启）。
+
+成功标志：日志出现 `plugin registered plugin_id=workbuddy-cpa version=0.3.x`。然后到 CPA 面板添加 CodeBuddy 凭据，扫码登录。
+
+**Windows 平台注意**：
+- Intel/AMD 处理器下载 `_windows_amd64.zip`，骁龙等 ARM 设备才用 `_windows_arm64.zip`——
+  架构下错（如 Intel 机器装 arm64 包）时 LoadLibrary 直接失败，面板同样显示"已识别但未注册"。
+- 若启用后仍注册失败，把配置里 `logging-to-file` 改为 `true` 后重启看日志（LoadLibrary 报错、
+  依赖缺失等都会记录在案）。
 
 ## 自定义模型列表
 
 ```yaml
 plugins:
+  enabled: true
   configs:
-    workbuddy:
+    workbuddy-cpa:
       enabled: true
       models:
         - id: glm-5.3-flash
