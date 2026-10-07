@@ -69,7 +69,7 @@ print('delegation OK: host-owned disabled flag surfaced for', len(accs), 'accoun
 "
 
 echo "== 5) panel page =="
-PANEL=$(curl -sf "$B/v0/resource/plugins/workbuddy/panel")
+PANEL=$(curl -sf "$B/v0/resource/plugins/workbuddy-cpa/panel")
 for needle in "总积分额度" "账号配额总览" "账号额度明细" addAccount deleteAccount toggleAccount "auth-files"; do
   printf '%s' "$PANEL" | grep -q -- "$needle" || { echo "panel missing: $needle"; exit 1; }
 done

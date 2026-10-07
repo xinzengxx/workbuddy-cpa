@@ -2,11 +2,22 @@ use crate::rpc::{Capabilities, Metadata, ModelInfo, Registration};
 
 pub const PROVIDER_NAME: &str = "workbuddy";
 
+/// Plugin (file) identity — must equal the dylib file name stem. It is
+/// deliberately DIFFERENT from the provider name: the plugin-store matches
+/// installed file IDs against registry entries, and the official registry's
+/// "workbuddy" slot belongs to someone else's plugin
+/// (zidanefaqih/codebuddy-intl-cpa) — that collision made the store show
+/// their repo and offer to "update" over our build. The provider /
+/// credential / model identity stays PROVIDER_NAME ("workbuddy"):
+/// auth.identifier, executor.identifier, model owned_by and the existing
+/// workbuddy-*.json credential files are all unaffected.
+pub const PLUGIN_ID: &str = "workbuddy-cpa";
+
 pub fn default_registration() -> Registration {
     Registration {
         schema_version: crate::SCHEMA_VERSION,
         metadata: Metadata {
-            name: PROVIDER_NAME.into(),
+            name: PLUGIN_ID.into(),
             version: env!("CARGO_PKG_VERSION").into(),
             author: "xinyuan (Rust rewrite; original workbuddy plugin by Sliverkiss)".into(),
             // The host plugin-store card links exactly this URL (host reads
@@ -129,6 +140,9 @@ mod tests {
         let reg = default_registration();
         assert_eq!(reg.metadata.repo, "https://github.com/xinzengxx/workbuddy-cpa");
         assert_eq!(reg.metadata.version, env!("CARGO_PKG_VERSION"));
+        // Plugin id must differ from the registry-occupied "workbuddy" slot.
+        assert_eq!(reg.metadata.name, PLUGIN_ID);
+        assert_ne!(reg.metadata.name, PROVIDER_NAME);
         assert!(!reg.metadata.author.is_empty());
     }
 

@@ -66,11 +66,20 @@ fn html_response(body: &str) -> MgmtResponse {
 pub fn handle(method: &str, path: &str, query: &str, body_b64: &str) -> MgmtResponse {
     let path = path.trim_end_matches('/');
 
-    // Browser UI resource routes.
-    let res_prefix = format!("/v0/resource/plugins/{PROVIDER_NAME}");
-    if method == "GET" && path.starts_with(&res_prefix) {
-        let sub = &path[res_prefix.len()..];
-        return match sub {
+    // Browser UI resource routes. The host injects the CURRENT plugin ID into
+    // the served path (/v0/resource/plugins/<plugin-id>/...), and the plugin
+    // id is the dylib file name — deliberately different from the provider
+    // name so the plugin-store stops matching us to the registry's
+    // "workbuddy" entry (zidanefaqih's CodeBuddy Intl CPA). Only routes we
+    // declared are dispatched here, so accept any id segment.
+    let res_prefix = "/v0/resource/plugins/";
+    if method == "GET" && path.starts_with(res_prefix) {
+        let rest = &path[res_prefix.len()..];
+        let sub = match rest.split_once('/') {
+            Some((_, tail)) => format!("/{tail}"),
+            None => String::new(), // exactly /v0/resource/plugins/<id>
+        };
+        return match sub.as_str() {
             "" | "/" | "/panel" | "/panel.html" => html_response(PANEL_HTML),
             _ => json_response(404, serde_json::json!({"error": "not found"})),
         };

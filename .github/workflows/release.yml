@@ -37,11 +37,14 @@ jobs:
         run: |
           VER="${GITHUB_REF_NAME#v}"
           [ "$VER" = "$GITHUB_REF_NAME" ] && VER="manual-${GITHUB_SHA::7}"
-          ZIP="workbuddy_${VER}_${{ matrix.goos }}_${{ matrix.goarch }}.zip"
+          # Zip name follows pluginstore.ArchiveName(PLUGIN_ID, ...): the
+          # plugin-store resolves release assets as {id}_{ver}_{goos}_{goarch}.zip.
+          ZIP="workbuddy-cpa_${VER}_${{ matrix.goos }}_${{ matrix.goarch }}.zip"
           mkdir -p pkg
           SRC="target/${{ matrix.target }}/release/libworkbuddy.${{ matrix.ext }}"
           [ -f "$SRC" ] || SRC="target/${{ matrix.target }}/release/workbuddy.${{ matrix.ext }}"
-          cp "$SRC" "pkg/workbuddy.${{ matrix.ext }}"
+          # The dylib file name (minus extension) IS the plugin id.
+          cp "$SRC" "pkg/workbuddy-cpa.${{ matrix.ext }}"
           (cd pkg && zip "../$ZIP" *)
           echo "ZIP=$ZIP" >> "$GITHUB_ENV"
 
@@ -50,11 +53,11 @@ jobs:
         shell: pwsh
         run: |
           $VER = $env:GITHUB_REF_NAME -replace '^v',''
-          $ZIP = "workbuddy_${VER}_${{ matrix.goos }}_${{ matrix.goarch }}.zip"
+          $ZIP = "workbuddy-cpa_${VER}_${{ matrix.goos }}_${{ matrix.goarch }}.zip"
           New-Item -ItemType Directory -Force pkg | Out-Null
           $src = "target/${{ matrix.target }}/release/workbuddy.${{ matrix.ext }}"
           if (-not (Test-Path $src)) { $src = "target/${{ matrix.target }}/release/libworkbuddy.${{ matrix.ext }}" }
-          Copy-Item $src "pkg/workbuddy.${{ matrix.ext }}"
+          Copy-Item $src "pkg/workbuddy-cpa.${{ matrix.ext }}"
           Compress-Archive -Path "pkg/*" -DestinationPath $ZIP
           "ZIP=$ZIP" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
 
@@ -73,10 +76,10 @@ jobs:
           merge-multiple: true
 
       - name: Checksums
-        run: sha256sum workbuddy_*.zip > checksums.txt
+        run: sha256sum workbuddy-cpa_*.zip > checksums.txt
 
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            workbuddy_*.zip
+            workbuddy-cpa_*.zip
             checksums.txt

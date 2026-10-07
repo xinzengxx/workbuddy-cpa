@@ -26,20 +26,24 @@ CPA 的 Go 插件要求宿主与插件共享包**逐字节同源**——CPA 每�
 
 ## 安装
 
-**前置**：运行中的 CLIProxyAPI v7.2.x（带 CGO / 插件支持）。
+**前置**：运行中的 CLIProxyAPI（带 CGO / 插件支持，v7.2.x ~ v8.x 实测可用）。
+
+> **重要**：插件文件名（去掉扩展名）就是插件 ID。请保持为 `workbuddy-cpa`——
+> 官方插件商店注册表里 `workbuddy` 这个 ID 已被另一个插件（zidanefaqih/codebuddy-intl-cpa）占用，
+> 若把文件名改回 `workbuddy.dylib`，商店会错误地把它配对到那个插件并显示对方的仓库链接。
 
 ### 方式一：Release 下载（推荐）
 
-从 [Releases](../../releases) 下载对应平台 zip（macOS：`workbuddy_0.3.2_darwin_arm64.zip` / `_darwin_amd64.zip`；Linux：`_linux_amd64.zip` / `_linux_arm64.zip`；Windows：`_windows_amd64.zip` / `_windows_arm64.zip`），解压出 `workbuddy.dylib`（Linux 为 `.so`，Windows 为 `.dll`），放入 CPA 插件目录。
+从 [Releases](../../releases) 下载对应平台 zip（macOS：`workbuddy-cpa_0.3.6_darwin_arm64.zip` / `_darwin_amd64.zip`；Linux：`_linux_amd64.zip` / `_linux_arm64.zip`；Windows：`_windows_amd64.zip` / `_windows_arm64.zip`），解压出 `workbuddy-cpa.dylib`（Linux 为 `.so`，Windows 为 `.dll`），放入 CPA 插件目录。
 
-> **升级时先删旧文件再放新文件**（`rm workbuddy.dylib && cp ...`，或 `cp` 到临时名再 `mv` 覆盖）。
+> **升级时先删旧文件再放新文件**（`rm workbuddy-cpa.dylib && cp ...`，或 `cp` 到临时名再 `mv` 覆盖）。
 > 直接 `cp` 原地覆盖一个**正被运行中的 CPA 映射**的 `.dylib`，会让 macOS 判定该文件代码签名失效，
 > 之后任何 `dlopen` 它的进程都会被 SIGKILL（崩溃报告 `CODESIGNING / Invalid Page`）。
-> 换新 inode（先删后写、或改名覆盖）即可避免；万一中招，`codesign --force --sign - workbuddy.dylib` 也能救回来。
+> 换新 inode（先删后写、或改名覆盖）即可避免；万一中招，`codesign --force --sign - workbuddy-cpa.dylib` 也能救回来。
 
 ### 方式二：CPA 插件商店
 
-zip 命名与 CPA `internal/pluginstore.ArchiveName` 规范一致，CPA 面板内置插件商店可直接安装（若已收录本仓库）。
+zip 命名与 CPA `internal/pluginstore.ArchiveName` 规范一致（`workbuddy-cpa_{版本}_{goos}_{goarch}.zip`）。官方注册表尚未收录本仓库；收录后商店可直接安装，或通过配置 `store-sources` 指向自建注册表。
 
 ### 方式三：源码编译
 
@@ -47,11 +51,11 @@ zip 命名与 CPA `internal/pluginstore.ArchiveName` 规范一致，CPA 面板�
 git clone <this-repo>
 cd workbuddy-cpa
 cargo build --release
-# 先删后放：避免原地覆盖正在被 CPA 映射的旧产物
-rm -f ~/.cli-proxy-api/plugins/workbuddy.dylib
-cp target/release/libworkbuddy.dylib ~/.cli-proxy-api/plugins/   # macOS: *.dylib
-cp target/release/libworkbuddy.so    ~/.cli-proxy-api/plugins/   # Linux: *.so
-cp target/release/workbuddy.dll      <CPA插件目录>/              # Windows: *.dll
+# 先删后放：避免原地覆盖正在被 CPA 映射的旧产物；文件名即插件 ID，必须保持 workbuddy-cpa
+rm -f ~/.cli-proxy-api/plugins/workbuddy.dylib ~/.cli-proxy-api/plugins/workbuddy-cpa.dylib
+cp target/release/libworkbuddy.dylib ~/.cli-proxy-api/plugins/workbuddy-cpa.dylib   # macOS: *.dylib
+cp target/release/libworkbuddy.so    ~/.cli-proxy-api/plugins/workbuddy-cpa.so      # Linux: *.so
+cp target/release/workbuddy.dll      <CPA插件目录>/workbuddy-cpa.dll                # Windows: *.dll
 ```
 
 > Windows 注意：CPA 插件目录取配置里 `plugins.dir`（可用相对路径，如 CPA 可执行文件同目录下的 `plugins/`）。Windows 上若 CPA 由任务计划/服务方式启动，建议像 macOS 一样把 `dir` 写成绝对路径（如 `C:\path\to\plugins`），避免工作目录不确定导致找不到插件。
