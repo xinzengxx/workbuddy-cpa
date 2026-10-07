@@ -9,7 +9,10 @@ pub fn default_registration() -> Registration {
             name: PROVIDER_NAME.into(),
             version: env!("CARGO_PKG_VERSION").into(),
             author: "xinyuan (Rust rewrite; original workbuddy plugin by Sliverkiss)".into(),
-            repo: "https://github.com/lovingfish/workbuddy-cliproxy".into(),
+            // The host plugin-store card links exactly this URL (host reads
+            // plugin.Metadata.GitHubRepository from the registration). Must
+            // point at THIS repo, not the Go upstream this rewrite came from.
+            repo: "https://github.com/xinzengxx/workbuddy-cpa".into(),
         },
         capabilities: Capabilities {
             model_provider: true,
@@ -117,6 +120,17 @@ pub fn merge_model_overrides(base: Vec<ModelInfo>, config_yaml: &[u8]) -> Vec<Mo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn registration_repo_points_at_this_repo() {
+        // The plugin-store card links whatever GitHubRepository the
+        // registration metadata carries. The value used to be inherited from
+        // the Go upstream and pointed at someone else's repo — pin ours.
+        let reg = default_registration();
+        assert_eq!(reg.metadata.repo, "https://github.com/xinzengxx/workbuddy-cpa");
+        assert_eq!(reg.metadata.version, env!("CARGO_PKG_VERSION"));
+        assert!(!reg.metadata.author.is_empty());
+    }
 
     #[test]
     fn merge_override_replaces_context_and_appends_new() {
