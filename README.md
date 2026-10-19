@@ -20,9 +20,11 @@ CPA 的 Go 插件要求宿主与插件共享包**逐字节同源**——CPA 每�
 
 ## 模型（内置默认表）
 
-`glm-5.2` · `glm-5.3-flash` · `glm-5.1` · `glm-5v-turbo` · `kimi-k2.7` · `minimax-m3-pay` · `hy3` · `hy3-preview` · `hy3-preview-agent` · `deepseek-v4-pro` · `deepseek-v4-flash` · `deepseek-v4.1-flash`
+本插件现在**只提供 GLM 系列**，避免 CPA 把 DeepSeek/Kimi/Hy3/MiniMax 的请求路由到 WorkBuddy：
 
-具体可用性以 CodeBuddy 账号权限为准。
+`glm-5.1` · `glm-5.2` · `glm-5.3` · `glm-5.3-flash` · `glm-5v-turbo`
+
+DeepSeek 请走 Qoder CN 插件（`qoderwork`）。配置里的 `models:` 覆盖只能新增/调整 `glm-*` 条目，非 GLM 条目会被忽略；executor 也会拒绝非 GLM 模型。
 
 ## 安装
 

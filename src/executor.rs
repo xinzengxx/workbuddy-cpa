@@ -169,6 +169,7 @@ fn note_usage_from(auth_id: &str, usage: &Option<Value>) {
 /// Non-streaming client request: CodeBuddy rejects stream:false upstream
 /// (code 11101), so always stream and fold chunks into one chat.completion.
 pub fn execute(req: &ExecReq) -> Result<ExecutorExecResponse, String> {
+    crate::models::require_glm_model(&req.model)?;
     let started = std::time::Instant::now();
     let body = sanitize_request(if req.payload.is_empty() { &req.original } else { &req.payload });
     let result = post_chat(&body, &req.storage)
@@ -210,6 +211,7 @@ pub fn execute(req: &ExecReq) -> Result<ExecutorExecResponse, String> {
 /// Streaming: without a stream_id collect chunks synchronously; with one,
 /// return immediately and pump chunks from a background thread.
 pub fn execute_stream(req: &ExecReq) -> Result<ExecutorStreamResponse, String> {
+    crate::models::require_glm_model(&req.model)?;
     let sse_framed = sse_framed_for_path(&req.metadata);
     let headers = stream_headers();
     let started = std::time::Instant::now();

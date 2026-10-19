@@ -38,25 +38,38 @@ pub fn default_registration() -> Registration {
     }
 }
 
-/// Builtin model table, identical to the Go plugin's snapshot plus
-/// glm-5.3-flash. Config overrides (models: key in the plugin's config_yaml)
-/// are merged on top at register/reconfigure time.
+/// GLM-only allowlist. WorkBuddy must not advertise DeepSeek/Kimi/Hy3/MiniMax:
+/// CPA routes by model id, so omitting those ids is what keeps their traffic
+/// from ever selecting a WorkBuddy credential.
+pub fn is_glm_model(id: &str) -> bool {
+    id.trim().to_ascii_lowercase().starts_with("glm-")
+}
+
+/// The host may pass "workbuddy/glm-5.2" or a bare id. Strip a provider prefix
+/// and reject anything outside the GLM family before an upstream request is made.
+pub fn require_glm_model(model: &str) -> Result<String, String> {
+    let bare = model.rsplit('/').next().unwrap_or(model).trim();
+    if bare.is_empty() {
+        return Ok(String::new());
+    }
+    if is_glm_model(bare) {
+        Ok(bare.to_string())
+    } else {
+        Err(format!(
+            "model_not_supported: workbuddy-cpa serves GLM models only (got {model})"
+        ))
+    }
+}
+
+/// Builtin model table is deliberately GLM-only. Config overrides (models: key
+/// in the plugin's config_yaml) may add or tune GLM entries, never other families.
 pub fn builtin_models() -> Vec<ModelInfo> {
     let specs: &[(&str, &str, i64)] = &[
         ("glm-5.2", "GLM-5.2", 1_000_000),
         ("glm-5.3-flash", "GLM-5.3 Flash", 1_000_000),
         ("glm-5.1", "GLM-5.1", 131_072),
         ("glm-5v-turbo", "GLM-5V Turbo", 131_072),
-        ("kimi-k2.7", "Kimi K2.7", 262_144),
-        ("kimi-k3", "Kimi K3", 262_144),
         ("glm-5.3", "GLM-5.3", 131_072),
-        ("minimax-m3-pay", "MiniMax M3", 204_800),
-        ("hy3", "Hy3", 262_144),
-        ("hy3-preview", "Hy3 Preview", 262_144),
-        ("hy3-preview-agent", "Hy3 Preview Agent", 262_144),
-        ("deepseek-v4-pro", "DeepSeek V4 Pro", 1_000_000),
-        ("deepseek-v4-flash", "DeepSeek V4 Flash", 1_000_000),
-        ("deepseek-v4.1-flash", "DeepSeek V4.1 Flash", 1_000_000),
     ];
     specs
         .iter()
@@ -84,7 +97,8 @@ struct ModelOverride {
 }
 
 /// Merge `models:` overrides from the plugin's config_yaml onto the builtin
-/// table: entries replace by id (context/name fields optional), new ids append.
+/// table: entries replace by id (context/name fields optional), new GLM ids
+/// append. Non-GLM entries are ignored so config cannot widen the allowlist.
 /// Unparsable config falls back to the base table (logged by the caller).
 pub fn merge_model_overrides(base: Vec<ModelInfo>, config_yaml: &[u8]) -> Vec<ModelInfo> {
     let parsed: serde_yaml::Value = match serde_yaml::from_slice(config_yaml) {
@@ -104,6 +118,9 @@ pub fn merge_model_overrides(base: Vec<ModelInfo>, config_yaml: &[u8]) -> Vec<Mo
     }
     let mut out = base;
     for ov in overrides {
+        if !is_glm_model(&ov.id) {
+            continue;
+        }
         if let Some(existing) = out.iter_mut().find(|m| m.id == ov.id) {
             if let Some(ctx) = ov.context {
                 existing.context_length = ctx;
@@ -147,15 +164,33 @@ mod tests {
     }
 
     #[test]
-    fn merge_override_replaces_context_and_appends_new() {
+    fn builtin_models_are_glm_only() {
+        let models = builtin_models();
+        assert_eq!(models.len(), 5);
+        assert!(models.iter().all(|m| is_glm_model(&m.id)));
+        assert!(models.iter().all(|m| m.owned_by == PROVIDER_NAME));
+    }
+
+    #[test]
+    fn require_glm_model_strips_prefix_and_rejects_other_families() {
+        assert_eq!(require_glm_model("glm-5.2").unwrap(), "glm-5.2");
+        assert_eq!(require_glm_model("workbuddy/glm-5.3").unwrap(), "glm-5.3");
+        assert_eq!(require_glm_model("").unwrap(), "");
+        assert!(require_glm_model("deepseek-v4-pro").is_err());
+        assert!(require_glm_model("kimi-k3").is_err());
+    }
+
+    #[test]
+    fn merge_override_replaces_context_and_appends_new_glm() {
         let base = builtin_models();
-        let yaml = b"enabled: true\npriority: 100\nmodels:\n  - id: glm-5.3-flash\n    context: 2000000\n  - id: kimi-k3\n    name: Kimi K3\n";
+        let yaml = b"enabled: true\npriority: 100\nmodels:\n  - id: glm-5.3-flash\n    context: 2000000\n  - id: glm-5.4\n    name: GLM 5.4\n  - id: kimi-k3\n    name: Kimi K3\n";
         let merged = merge_model_overrides(base, yaml);
         let f = merged.iter().find(|m| m.id == "glm-5.3-flash").unwrap();
         assert_eq!(f.context_length, 2_000_000);
-        let k3 = merged.iter().find(|m| m.id == "kimi-k3").unwrap();
-        assert_eq!(k3.display_name, "Kimi K3");
-        assert_eq!(merged.len(), 14);
+        let new = merged.iter().find(|m| m.id == "glm-5.4").unwrap();
+        assert_eq!(new.display_name, "GLM 5.4");
+        assert!(!merged.iter().any(|m| m.id == "kimi-k3"), "non-GLM override must be ignored");
+        assert_eq!(merged.len(), 6);
     }
 
     #[test]

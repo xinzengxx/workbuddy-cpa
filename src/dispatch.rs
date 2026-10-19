@@ -180,14 +180,15 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&raw).unwrap();
         assert_eq!(v["result"]["Provider"], "workbuddy");
         let models = v["result"]["Models"].as_array().unwrap();
-        assert!(models.len() >= 11);
+        assert_eq!(models.len(), 5);
         assert!(models.iter().any(|m| m["ID"] == "glm-5.3-flash"));
         assert!(models.iter().all(|m| m["OwnedBy"] == "workbuddy"));
+        assert!(models.iter().all(|m| m["ID"].as_str().unwrap().starts_with("glm-")));
     }
 
     #[test]
     fn reconfigure_hot_reloads_models() {
-        let mut cfg = "models:\n  - id: test-model-x\n    name: Test X\n".as_bytes().to_vec();
+        let mut cfg = "models:\n  - id: glm-test-x\n    name: Test X\n".as_bytes().to_vec();
         use base64::Engine as _;
         let b64 = base64::engine::general_purpose::STANDARD.encode(&cfg);
         let body = serde_json::json!({"config_yaml": b64}).to_string();
@@ -196,7 +197,7 @@ mod tests {
         assert_eq!(v["result"]["capabilities"]["executor"], true);
         let raw = handle("model.static", b"{}").unwrap();
         let v: serde_json::Value = serde_json::from_slice(&raw).unwrap();
-        assert!(v["result"]["Models"].as_array().unwrap().iter().any(|m| m["ID"] == "test-model-x"));
+        assert!(v["result"]["Models"].as_array().unwrap().iter().any(|m| m["ID"] == "glm-test-x"));
         // restore builtin table for other tests
         cfg.clear();
         let _ = cfg;
