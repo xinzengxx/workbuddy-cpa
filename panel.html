@@ -190,7 +190,7 @@ dialog::backdrop{background:rgba(4,6,9,.55)}
   </div>
 </div>
 <div id="loginBox" class="card">
-  <div class="meta" style="margin-bottom:2px">添加账号 · 用 CodeBuddy 客户端打开下面的授权链接完成登录，成功后自动保存为独立凭据文件。</div>
+  <div class="meta" style="margin-bottom:2px">添加账号 · 用 CodeBuddy 客户端打开下面的授权链接完成登录，成功后自动保存为独立凭据文件。<span style="color:var(--faint)">panel r3</span></div>
   <a id="loginLink" class="u" href="#" target="_blank" rel="noopener"></a>
   <div class="login-ops">
     <button class="btn" onclick="copyLoginUrl()">复制链接</button>
@@ -447,7 +447,14 @@ async function addAccount(){
   try{
     const r=await fetch(API+"/login/start",{credentials:"omit",headers:apiHeaders()});
     const d=await r.json();
-    if(d.error||!d.url){loginStatus('<span class="err">'+esc(d.error||"未返回授权链接")+'</span>');return}
+    if(d.error||(!d.url&&!d.url_base)){loginStatus('<span class="err">'+esc(d.error||"未返回授权链接")+'</span>');return}
+    // 宿主 Go 管理接口转发插件响应时会把 `&` 转义成 `&amp;`（html/template 行为，8.0.10 实测），
+    // authUrl 的查询分隔符因此损坏、浏览器把 state 解析成 "amp;state"，登录页报"链接不完整"。
+    // 首选方案：后端额外返回 url_base（截到 &state= 之前的纯前缀），这里用 state 自行拼装，
+    // 整条链接的查询串从头生成，完全不经过宿主的转义路径。
+    if(d.url_base&&d.state){d.url=String(d.url_base)+"&state="+encodeURIComponent(d.state)}
+    // 兜底：老后端没有 url_base 时，对原串做还原（宿主将来不再转义时该替换无副作用）。
+    d.url=String(d.url||"").replace(/&amp;|&#0*38;/gi,"&");
     LOGIN=d;
     const link=document.getElementById("loginLink");
     link.href=d.url;link.textContent=d.url;

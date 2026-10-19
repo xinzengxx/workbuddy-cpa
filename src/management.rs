@@ -27,6 +27,16 @@ pub fn registration() -> ManagementRegistration {
             },
             crate::rpc::ManagementRoute {
                 method: "GET",
+                path: "/plugins/workbuddy/checkin".into(),
+                description: "Today's check-in status for all WorkBuddy accounts.".into(),
+            },
+            crate::rpc::ManagementRoute {
+                method: "POST",
+                path: "/plugins/workbuddy/checkin".into(),
+                description: "Claim the daily check-in for all WorkBuddy accounts.".into(),
+            },
+            crate::rpc::ManagementRoute {
+                method: "GET",
                 path: "/plugins/workbuddy/recent".into(),
                 description: "Recent chat calls (last 10): account, model, token usage, status.".into(),
             },
@@ -58,6 +68,10 @@ fn json_response(status_code: u16, v: serde_json::Value) -> MgmtResponse {
 fn html_response(body: &str) -> MgmtResponse {
     let mut headers = HashMap::new();
     headers.insert("Content-Type".into(), vec!["text/html; charset=utf-8".into()]);
+    // 面板是内嵌在 dylib 里的：不禁止缓存的话，升级后浏览器会继续跑旧 JS，
+    // 表现为"改了代码但行为没变"（2026-10-19 登录链接修复时踩过）。
+    headers.insert("Cache-Control".into(), vec!["no-store, no-cache, must-revalidate, max-age=0".into()]);
+    headers.insert("Pragma".into(), vec!["no-cache".into()]);
     MgmtResponse { status_code: 200, headers, body: b64_encode(body.as_bytes()) }
 }
 
@@ -94,6 +108,12 @@ pub fn handle(method: &str, path: &str, query: &str, body_b64: &str) -> MgmtResp
         ("POST", p) if p == format!("{base}/refresh") => {
             json_response(200, build_accounts_dashboard())
         }
+        ("GET", p) if p == format!("{base}/checkin") => {
+            json_response(200, crate::checkin::status_all())
+        }
+        ("POST", p) if p == format!("{base}/checkin") => {
+            json_response(200, crate::checkin::run_all())
+        }
         ("GET", p) if p == format!("{base}/login/start") => json_response(200, handle_login_start()),
         ("GET", p) if p == format!("{base}/login/poll") => {
             json_response(200, handle_login_poll(query, body_b64))
@@ -129,13 +149,25 @@ fn json_body(body_b64: &str) -> serde_json::Value {
 /// its own auth page, but this panel polls itself, so both paths coexist.
 fn handle_login_start() -> serde_json::Value {
     match crate::auth::start_login() {
-        Ok(r) => serde_json::json!({
-            "ok": true,
-            "provider": r.provider,
-            "url": r.url,
-            "state": r.state,
-            "expires_at": r.expires_at,
-        }),
+        Ok(r) => {
+            // 宿主转发时会把响应里的 `&` 转义成 `&amp;`，authUrl 的 state 参数
+            // 因此在浏览器侧丢失（登录页报"链接不完整"）。额外给出去掉 state 的
+            // 前缀，面板用 url_base + "&state=" + state 自行拼装，不依赖原串转义。
+            let url_base = r
+                .url
+                .split("&state=")
+                .next()
+                .unwrap_or(&r.url)
+                .to_string();
+            serde_json::json!({
+                "ok": true,
+                "provider": r.provider,
+                "url": r.url,
+                "url_base": url_base,
+                "state": r.state,
+                "expires_at": r.expires_at,
+            })
+        }
         Err(e) => serde_json::json!({"error": e}),
     }
 }
@@ -177,22 +209,89 @@ fn handle_login_poll(query: &str, body_b64: &str) -> serde_json::Value {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let save_body = serde_json::json!({"name": auth.file_name, "json": cred});
-    match crate::cabi::host_call("host.auth.save", save_body.to_string().as_bytes()) {
-        Ok(_) => serde_json::json!({
+    // 不走 `host.auth.save`：宿主 8.0.30 会把插件送来的凭据登记成别的 provider
+    // （2026-10-20 实测：workbuddy 的凭据落盘后 provider/type 双双击成 `qoderwork`，
+    // 于是面板按 provider 过滤时看不见、路由也交给了另一个插件）。直接按宿主能识别
+    // 的最小信封写文件，宿主文件监听会立刻把它注册为 workbuddy。
+    match write_credential_file(&auth.file_name, &cred) {
+        Ok(()) => serde_json::json!({
             "status": "success",
             "file_name": auth.file_name,
             "label": auth.label,
             "saved": true,
             "nickname": nickname,
         }),
-        Err(e) => serde_json::json!({
-            "status": "success",
-            "file_name": auth.file_name,
-            "saved": false,
-            "error": format!("host.auth.save failed: {e}"),
-        }),
+        Err(e) => {
+            // 兜底：写盘失败时仍走宿主接口，宁可标签不对也不能丢凭据
+            let save_body = serde_json::json!({"name": auth.file_name, "json": cred});
+            match crate::cabi::host_call("host.auth.save", save_body.to_string().as_bytes()) {
+                Ok(_) => serde_json::json!({
+                    "status": "success",
+                    "file_name": auth.file_name,
+                    "label": auth.label,
+                    "saved": true,
+                    "nickname": nickname,
+                    "warning": format!("direct write failed, saved through host: {e}"),
+                }),
+                Err(e2) => serde_json::json!({
+                    "status": "success",
+                    "file_name": auth.file_name,
+                    "saved": false,
+                    "error": format!("write failed: {e}; host.auth.save failed: {e2}"),
+                }),
+            }
+        }
     }
+}
+
+/// 凭据目录。插件自己的状态文件就在 `~/.cli-proxy-api` 下，凭据与它同目录；
+/// 宿主的 `auth-dir` 若被改过，可用 `CPA_AUTH_DIR` 覆盖。
+fn auth_dir() -> std::path::PathBuf {
+    if let Ok(d) = std::env::var("CPA_AUTH_DIR") {
+        if !d.trim().is_empty() {
+            return std::path::PathBuf::from(d);
+        }
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    std::path::PathBuf::from(home).join(".cli-proxy-api")
+}
+
+/// 按宿主能识别的形态落盘：`{account, auth, disabled, type}`，**不写 `provider`**。
+/// 宿主优先读 `provider`，缺省时按 `type` 推导；写入 provider 反而会被带偏。
+/// 原子写（.tmp + rename），并保留旧文件里的 note/logo/disabled——重新登录不该
+/// 抹掉用户改过的备注，也不该悄悄把已停用的账号重新启用。
+pub(crate) fn write_credential_file(file_name: &str, cred: &serde_json::Value) -> Result<(), String> {
+    if file_name.trim().is_empty() || file_name.contains('/') || file_name.contains("..") {
+        return Err(format!("invalid credential file name: {file_name}"));
+    }
+    let path = auth_dir().join(file_name);
+    let prev: Option<serde_json::Value> = std::fs::read(&path)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok());
+
+    let mut out = serde_json::Map::new();
+    if let Some(serde_json::Value::Object(m)) = &prev {
+        for k in ["note", "logo", "disabled"] {
+            if let Some(v) = m.get(k) {
+                out.insert(k.to_string(), v.clone());
+            }
+        }
+    }
+    if let Some(m) = cred.as_object() {
+        for (k, v) in m {
+            out.insert(k.clone(), v.clone());
+        }
+    }
+    out.insert("type".into(), serde_json::json!("workbuddy"));
+    out.remove("provider");
+
+    let body = serde_json::to_vec(&serde_json::Value::Object(out)).map_err(|e| e.to_string())?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, &body).map_err(|e| format!("write {}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, &path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("rename {}: {e}", path.display())
+    })
 }
 
 /// List every workbuddy credential the host knows about and attach a fresh
@@ -283,12 +382,12 @@ fn build_accounts_dashboard() -> serde_json::Value {
 }
 
 /// `workbuddy-abcdef.json` -> `abcdef`; anything else keeps its stem.
-fn display_from_file(name: &str) -> String {
+pub(crate) fn display_from_file(name: &str) -> String {
     let stem = name.strip_suffix(".json").unwrap_or(name);
     stem.strip_prefix("workbuddy-").unwrap_or(stem).to_string()
 }
 
-fn host_auth_get(auth_index: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn host_auth_get(auth_index: &str) -> Result<Vec<u8>, String> {
     let body = serde_json::json!({"auth_index": auth_index});
     let raw = crate::cabi::host_call("host.auth.get", body.to_string().as_bytes())?;
     let result = crate::rpc::parse_envelope(&raw)?;
@@ -362,6 +461,35 @@ mod tests {
         assert_eq!(ok2.status_code, 200);
         let bad = handle("GET", "/v0/resource/plugins/workbuddy/nope", "", "");
         assert_eq!(bad.status_code, 404);
+    }
+
+    #[test]
+    fn checkin_routes_are_declared_and_handled() {
+        let reg = registration();
+        assert!(reg
+            .routes
+            .iter()
+            .any(|r| r.method == "GET" && r.path == "/plugins/workbuddy/checkin"));
+        assert!(reg
+            .routes
+            .iter()
+            .any(|r| r.method == "POST" && r.path == "/plugins/workbuddy/checkin"));
+        let resp = handle("GET", "/v0/management/plugins/workbuddy/checkin", "", "");
+        assert_eq!(resp.status_code, 200);
+        let v: serde_json::Value =
+            serde_json::from_str(&String::from_utf8(b64_decode(&resp.body)).unwrap()).unwrap();
+        assert!(v["accounts"].is_array(), "checkin status must return an accounts array");
+    }
+
+    #[test]
+    fn panel_contains_checkin_controls() {
+        let ok = handle("GET", "/v0/resource/plugins/workbuddy/panel", "", "");
+        let body = String::from_utf8(b64_decode(&ok.body)).unwrap();
+        assert!(body.contains("每日签到"), "panel must contain the check-in card");
+        assert!(body.contains("checkinCard"), "check-in card must render into #checkinCard");
+        assert!(body.contains("runCheckin"), "panel must wire the batch check-in button");
+        assert!(body.contains(r#"API+"/checkin""#), "panel must call the check-in API");
+        assert!(body.contains("批量签到"), "panel must label the batch check-in action");
     }
 
     #[test]
