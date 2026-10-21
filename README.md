@@ -12,6 +12,7 @@ CPA 的 Go 插件要求宿主与插件共享包**逐字节同源**——CPA 每�
 
 - **扫码登录 / token 刷新**：完全走 CodeBuddy 插件协议；默认凭据 `workbuddy.json`，**多账号**各自落在独立文件 `workbuddy-{uid后6位}.json`
 - **多账号管理**：面板内「＋ 添加账号」（扫码/授权链接 + 轮询落盘）、卡片徽章一键启停、悬停 ✕ 删除；启停与删除走宿主权威接口（见下）
+- **手动批量签到**：面板「每日签到」卡片一键给所有 workbuddy 凭据领取签到积分（同 uid 去重，停用账号也签）；签到按北京时间重置，插件不常驻定时器
 - **chat 执行**：OpenAI chat-completions 输入输出；非流式请求自动转上游流式再聚合；跨格式入口（Anthropic 等）自动补 SSE 帧
 - **系统提示词改写**：绕开 CodeBuddy 对 Claude Code 模板短语的逐字屏蔽（`official CLI` → `official CLI tool`、`Main branch` → `Default branch`）
 - **hy3 系列强制 `reasoning_effort: high`**
@@ -121,13 +122,19 @@ CPA 默认端口 `8317`，API key 见 `config.yaml` 的 `api-keys`。
 | 操作 | 位置 | 实现 |
 |---|---|---|
 | 查看各账号额度/套餐明细 | 面板两区（总览卡片 + 明细表） | `GET /v0/management/plugins/workbuddy/accounts` |
-| 添加账号 | 面板「＋ 添加账号」 | `GET .../login/start` → 展示授权链接 → `POST .../login/poll` 成功后 `host.auth.save` 落独立凭据文件 |
+| 批量签到 | 面板「每日签到」→「批量签到」 | `GET .../checkin` 查状态；`POST .../checkin` 领取（`code=10001` 视为今日已签） |
+| 添加账号 | 面板「＋ 添加账号」 | `GET .../login/start` → 展示授权链接 → `POST .../login/poll` 成功后直接原子写入独立凭据文件（失败时回退 `host.auth.save`） |
 | 启用 / 停用账号 | 卡片徽章点击 | 面板直接调宿主 `PATCH /v0/management/auth-files/status` |
 | 删除账号 | 卡片右上 ✕ | 面板直接调宿主 `DELETE /v0/management/auth-files` |
 
 **为什么启停/删除不走插件自己的接口**：实测（CPA v7.2.130）`host.auth.save` 不会持久化 `disabled` 字段的改写，
 且删掉凭据文件后宿主内存里仍保留该凭据——两者都必须由宿主自己的 auth-files 接口完成。
 插件因此只负责模型/执行/额度，凭据生命周期完全交还宿主。
+
+> 签到是**手动触发**：插件不启动后台定时器，打开面板点一次「批量签到」即可。访问 token 过期时，
+> 签到接口会用 refresh token 自动刷新，并原子写回凭据文件；`daily-checkin` 返回的 `code=10001`
+> （即使外层是 HTTP 400）按“今日已签”处理。凭据默认在 `~/.cli-proxy-api`，宿主自定义 `auth-dir`
+> 时可用 `CPA_AUTH_DIR` 覆盖；刷新写回优先使用宿主 `auth-files` 返回的 `path`。
 
 > 已知限制：CPA v7.2.130 **不会调用插件声明的 `scheduler.pick`** 钩子，多账号由宿主内置 round-robin 轮转。
 > 插件已实现完整 `pick` 协议并保留 `scheduler: true` capability，宿主未来启用该钩子即自动生效（额度感知加权随机）。

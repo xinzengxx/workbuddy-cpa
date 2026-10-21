@@ -3,6 +3,7 @@ use crate::rpc::{b64_decode, b64_encode, ManagementRegistration, MgmtResponse};
 use base64::Engine as _;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::io::Write;
 
 pub const PANEL_HTML: &str = include_str!("../panel.html");
 pub const PROVIDER_NAME: &str = "workbuddy";
@@ -258,18 +259,43 @@ fn auth_dir() -> std::path::PathBuf {
 
 /// 按宿主能识别的形态落盘：`{account, auth, disabled, type}`，**不写 `provider`**。
 /// 宿主优先读 `provider`，缺省时按 `type` 推导；写入 provider 反而会被带偏。
-/// 原子写（.tmp + rename），并保留旧文件里的 note/logo/disabled——重新登录不该
-/// 抹掉用户改过的备注，也不该悄悄把已停用的账号重新启用。
+/// 原子写（.tmp + rename），并保留旧文件里的 note/logo/disabled——重新登录/刷新
+/// 不该抹掉用户改过的备注，也不该悄悄把已停用的账号重新启用。
 pub(crate) fn write_credential_file(file_name: &str, cred: &serde_json::Value) -> Result<(), String> {
-    if file_name.trim().is_empty() || file_name.contains('/') || file_name.contains("..") {
+    validate_credential_file_name(file_name)?;
+    let path = auth_dir().join(file_name.trim());
+    write_credential_path(&path, cred)
+}
+
+fn validate_credential_file_name(file_name: &str) -> Result<(), String> {
+    let name = file_name.trim();
+    if name.is_empty() || name.contains('\\') || name.contains("..") {
         return Err(format!("invalid credential file name: {file_name}"));
     }
-    let path = auth_dir().join(file_name);
-    let prev: Option<serde_json::Value> = std::fs::read(&path)
+    let mut components = std::path::Path::new(name).components();
+    let valid = matches!(components.next(), Some(std::path::Component::Normal(_)))
+        && components.next().is_none();
+    if !valid {
+        return Err(format!("invalid credential file name: {file_name}"));
+    }
+    Ok(())
+}
+
+pub(crate) fn write_credential_path(
+    path: &std::path::Path,
+    cred: &serde_json::Value,
+) -> Result<(), String> {
+    let prev: Option<serde_json::Value> = std::fs::read(path)
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok());
 
     let mut out = serde_json::Map::new();
+    if let Some(m) = cred.as_object() {
+        for (k, v) in m {
+            out.insert(k.clone(), v.clone());
+        }
+    }
+    // 放在 cred 之后：刷新/重新登录不能覆盖宿主的 disabled/备注/头像。
     if let Some(serde_json::Value::Object(m)) = &prev {
         for k in ["note", "logo", "disabled"] {
             if let Some(v) = m.get(k) {
@@ -277,21 +303,40 @@ pub(crate) fn write_credential_file(file_name: &str, cred: &serde_json::Value) -
             }
         }
     }
-    if let Some(m) = cred.as_object() {
-        for (k, v) in m {
-            out.insert(k.clone(), v.clone());
-        }
-    }
     out.insert("type".into(), serde_json::json!("workbuddy"));
     out.remove("provider");
 
     let body = serde_json::to_vec(&serde_json::Value::Object(out)).map_err(|e| e.to_string())?;
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, &body).map_err(|e| format!("write {}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, &path).map_err(|e| {
+    let _ = std::fs::remove_file(&tmp);
+    if let Err(e) = write_private_file(&tmp, &body) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("write {}: {e}", tmp.display()));
+    }
+    std::fs::rename(&tmp, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         format!("rename {}: {e}", path.display())
     })
+}
+
+fn write_private_file(path: &std::path::Path, body: &[u8]) -> Result<(), String> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(path).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| e.to_string())?;
+    }
+    f.write_all(body).map_err(|e| e.to_string())?;
+    f.sync_all().map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// List every workbuddy credential the host knows about and attach a fresh
@@ -461,6 +506,72 @@ mod tests {
         assert_eq!(ok2.status_code, 200);
         let bad = handle("GET", "/v0/resource/plugins/workbuddy/nope", "", "");
         assert_eq!(bad.status_code, 404);
+    }
+
+    #[test]
+    fn credential_write_is_private_and_preserves_flags() {
+        use std::sync::Mutex;
+        static ENV_LOCK: Mutex<()> = Mutex::new(());
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let dir = std::env::temp_dir().join(format!(
+            "workbuddy-cred-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("CPA_AUTH_DIR", &dir);
+        let path = dir.join("workbuddy-test.json");
+        let prev = serde_json::json!({
+            "account": {"uid": "u", "enterpriseId": "e", "nickname": "n"},
+            "auth": {"accessToken": "old", "refreshToken": "oldr", "expiresAt": 1, "domain": "www.codebuddy.cn"},
+            "note": "keep", "logo": "x", "disabled": true, "type": "workbuddy"
+        });
+        std::fs::write(&path, prev.to_string()).unwrap();
+        let cred = serde_json::json!({
+            "account": {"uid": "u", "enterpriseId": "e", "nickname": "n"},
+            "auth": {"accessToken": "new", "refreshToken": "newr", "expiresAt": 2, "domain": "www.codebuddy.cn"},
+            "disabled": false
+        });
+        write_credential_file("workbuddy-test.json", &cred).unwrap();
+        std::env::remove_var("CPA_AUTH_DIR");
+
+        let out: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(out["auth"]["accessToken"], "new");
+        assert_eq!(out["note"], "keep");
+        assert_eq!(out["logo"], "x");
+        assert_eq!(out["disabled"], true, "refresh must not re-enable a disabled account");
+        assert_eq!(out["type"], "workbuddy");
+        assert!(out.get("provider").is_none());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o077, 0, "credential must not be group/world readable, got {mode:o}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn credential_file_name_rejects_traversal_and_windows_paths() {
+        for bad in [
+            "",
+            "../x.json",
+            "a/b.json",
+            "C:\\evil.json",
+            "C:/evil.json",
+            "..",
+            "a\\b.json",
+        ] {
+            assert!(
+                validate_credential_file_name(bad).is_err(),
+                "{bad:?} should be rejected"
+            );
+        }
+        assert!(validate_credential_file_name("workbuddy-abc.json").is_ok());
     }
 
     #[test]
