@@ -44,6 +44,23 @@
   .btn.primary:hover{background:var(--acc-dim); border-color:var(--acc-dim)}
   .meta{font-size:13px; color:var(--faint); display:flex; flex-wrap:wrap; gap:8px 18px}
 
+  .invite{
+    display:flex; align-items:center; flex-wrap:wrap; gap:8px 12px;
+    margin-top:22px; padding:12px 16px;
+    background:var(--surface); border:1px solid var(--line); border-left:3px solid var(--acc);
+    border-radius:var(--r); font-size:13.5px; color:var(--muted);
+  }
+  .invite b{color:var(--fg); font-weight:600; flex:none}
+  .invite a{
+    font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace; font-size:12.5px;
+    word-break:break-all;
+  }
+  .invite .tag2{
+    flex:none; font-size:11px; font-weight:600; letter-spacing:.05em; text-transform:uppercase;
+    color:var(--acc); background:rgba(74,222,128,.1); border:1px solid rgba(74,222,128,.25);
+    padding:2px 8px; border-radius:6px;
+  }
+
   section{padding:56px 0; border-bottom:1px solid var(--line)}
   section:last-of-type{border-bottom:none}
   h2{font-size:24px; margin:0 0 8px; letter-spacing:-.01em; font-weight:650}
@@ -131,6 +148,11 @@
       <span>Rust · C ABI v1 / RPC schema v3</span>
       <span>macOS · Linux · Windows</span>
       <span>MIT License</span>
+    </div>
+    <div class="invite">
+      <b>注册邀请码</b>
+      <span class="tag2">inviteCode</span>
+      <a href="https://www.workbuddy.cn/events/invite?inviteCode=j6qd4iwg7" target="_blank" rel="noopener">workbuddy.cn/events/invite?inviteCode=j6qd4iwg7</a>
     </div>
   </div>
 </header>
