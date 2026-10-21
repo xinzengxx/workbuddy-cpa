@@ -13,10 +13,13 @@ pub const ENDPOINT_AUTH_TOKEN: &str = "/v2/plugin/auth/token?state=";
 pub const ENDPOINT_TOKEN_REFRESH: &str = "/v2/plugin/auth/token/refresh";
 pub const ENDPOINT_CHAT: &str = "/v2/chat/completions";
 pub const ENDPOINT_BILLING_USER_RESOURCE: &str = "/v2/billing/meter/get-user-resource";
+pub const ENDPOINT_CHECKIN_STATUS: &str = "/v2/billing/meter/checkin-activity-status";
+pub const ENDPOINT_CHECKIN_DAILY: &str = "/v2/billing/meter/daily-checkin";
 
 #[derive(Debug)]
 pub enum UpstreamError {
     Http(u16),
+    HttpApi(u16, i64, String),
     Api(i64, String),
     Transport(String),
 }
@@ -25,10 +28,46 @@ impl std::fmt::Display for UpstreamError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             UpstreamError::Http(s) => write!(f, "http_error: upstream {s}"),
+            UpstreamError::HttpApi(s, c, m) => {
+                write!(f, "http_error: upstream {s} code={c} msg={m}")
+            }
             UpstreamError::Api(c, m) => write!(f, "code={c} msg={m}"),
             UpstreamError::Transport(e) => write!(f, "transport: {e}"),
         }
     }
+}
+
+fn error_for(status: u16, code: i64, msg: &str) -> UpstreamError {
+    if status >= 400 && code != 0 {
+        UpstreamError::HttpApi(status, code, msg.to_string())
+    } else if status >= 400 {
+        UpstreamError::Http(status)
+    } else {
+        UpstreamError::Api(code, msg.to_string())
+    }
+}
+
+fn decode_error_response(status: u16, raw: &str) -> UpstreamError {
+    match decode_envelope(status, raw) {
+        Err(e) => e,
+        Ok(_) => UpstreamError::Http(status),
+    }
+}
+
+fn decode_envelope(status: u16, raw: &str) -> Result<serde_json::Value, UpstreamError> {
+    let v: serde_json::Value = serde_json::from_str(raw).map_err(|e| {
+        if status >= 400 {
+            UpstreamError::Http(status)
+        } else {
+            UpstreamError::Transport(format!("parse: {e}"))
+        }
+    })?;
+    let code = v["code"].as_i64().unwrap_or(0);
+    let msg = v["msg"].as_str().unwrap_or("");
+    if status >= 400 || code != 0 {
+        return Err(error_for(status, code, msg));
+    }
+    Ok(v["data"].clone())
 }
 
 fn tls_config() -> Result<rustls::ClientConfig, String> {
@@ -145,24 +184,32 @@ pub fn post_envelope(
     headers: HeaderSet,
     body: &str,
 ) -> Result<serde_json::Value, UpstreamError> {
+    post_envelope_with_timeout(agent, path, headers, body, ENVELOPE_TIMEOUT)
+}
+
+/// Same as post_envelope, with an explicit per-request timeout. Small
+/// endpoints (check-in) use a shorter bound so a slow account cannot hold a
+/// management request for the full envelope timeout.
+pub fn post_envelope_with_timeout(
+    agent: &ureq::Agent,
+    path: &str,
+    headers: HeaderSet,
+    body: &str,
+    timeout: Duration,
+) -> Result<serde_json::Value, UpstreamError> {
     let url = format!("{UPSTREAM_BASE}{path}");
-    let req = headers.apply_to(agent.post(&url).timeout(ENVELOPE_TIMEOUT));
-    let resp = req.send_string(body).map_err(|e| match e {
-        ureq::Error::Status(s, _) => UpstreamError::Http(s),
-        other => UpstreamError::Transport(other.to_string()),
-    })?;
+    let req = headers.apply_to(agent.post(&url).timeout(timeout));
+    let resp = match req.send_string(body) {
+        Ok(r) => r,
+        Err(ureq::Error::Status(status, resp)) => {
+            let raw = resp.into_string().unwrap_or_default();
+            return Err(decode_error_response(status, &raw));
+        }
+        Err(other) => return Err(UpstreamError::Transport(other.to_string())),
+    };
     let status = resp.status();
     let raw = resp.into_string().map_err(|e| UpstreamError::Transport(e.to_string()))?;
-    let v: serde_json::Value =
-        serde_json::from_str(&raw).map_err(|e| UpstreamError::Transport(format!("parse: {e}")))?;
-    if status >= 400 {
-        return Err(UpstreamError::Http(status));
-    }
-    let code = v["code"].as_i64().unwrap_or(0);
-    if code != 0 {
-        return Err(UpstreamError::Api(code, v["msg"].as_str().unwrap_or("").into()));
-    }
-    Ok(v["data"].clone())
+    decode_envelope(status, &raw)
 }
 
 /// GET with headers, same envelope decoding as post_envelope.
@@ -173,22 +220,17 @@ pub fn get_envelope(
 ) -> Result<serde_json::Value, UpstreamError> {
     let url = format!("{UPSTREAM_BASE}{path}");
     let req = headers.apply_to(agent.get(&url).timeout(ENVELOPE_TIMEOUT));
-    let resp = req.call().map_err(|e| match e {
-        ureq::Error::Status(s, _) => UpstreamError::Http(s),
-        other => UpstreamError::Transport(other.to_string()),
-    })?;
+    let resp = match req.call() {
+        Ok(r) => r,
+        Err(ureq::Error::Status(status, resp)) => {
+            let raw = resp.into_string().unwrap_or_default();
+            return Err(decode_error_response(status, &raw));
+        }
+        Err(other) => return Err(UpstreamError::Transport(other.to_string())),
+    };
     let status = resp.status();
     let raw = resp.into_string().map_err(|e| UpstreamError::Transport(e.to_string()))?;
-    let v: serde_json::Value =
-        serde_json::from_str(&raw).map_err(|e| UpstreamError::Transport(format!("parse: {e}")))?;
-    if status >= 400 {
-        return Err(UpstreamError::Http(status));
-    }
-    let code = v["code"].as_i64().unwrap_or(0);
-    if code != 0 {
-        return Err(UpstreamError::Api(code, v["msg"].as_str().unwrap_or("").into()));
-    }
-    Ok(v["data"].clone())
+    decode_envelope(status, &raw)
 }
 
 #[cfg(test)]
@@ -250,6 +292,49 @@ mod tests {
         let hs = common_header_set();
         assert!(hs.0.iter().any(|(k, v)| k == "User-Agent" && v == CLIENT_UA));
         assert!(hs.0.iter().any(|(k, v)| k == "Origin" && v == ORIGIN));
+    }
+
+    #[test]
+    fn error_for_keeps_http_status_and_api_code() {
+        match error_for(400, 10001, "already") {
+            UpstreamError::HttpApi(400, 10001, msg) => assert_eq!(msg, "already"),
+            other => panic!("expected HttpApi, got {other:?}"),
+        }
+        assert!(matches!(
+            error_for(500, 0, ""),
+            UpstreamError::Http(500)
+        ));
+        match error_for(200, 500, "boom") {
+            UpstreamError::Api(500, msg) => assert_eq!(msg, "boom"),
+            other => panic!("expected Api, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn status_error_body_preserves_code_10001() {
+        match decode_error_response(400, r#"{"code":10001,"msg":"今天已签到"}"#) {
+            UpstreamError::HttpApi(400, 10001, msg) => assert_eq!(msg, "今天已签到"),
+            other => panic!("expected HttpApi, got {other:?}"),
+        }
+        assert!(matches!(
+            decode_error_response(500, "not json"),
+            UpstreamError::Http(500)
+        ));
+    }
+
+    #[test]
+    fn decode_envelope_returns_data_on_success() {
+        let v = decode_envelope(200, r#"{"code":0,"msg":"OK","data":{"x":1}}"#).unwrap();
+        assert_eq!(v["x"], 1);
+    }
+
+    #[test]
+    fn checkin_endpoints_use_v2_billing_paths() {
+        assert_eq!(
+            ENDPOINT_CHECKIN_STATUS,
+            "/v2/billing/meter/checkin-activity-status"
+        );
+        assert_eq!(ENDPOINT_CHECKIN_DAILY, "/v2/billing/meter/daily-checkin");
     }
 
     /// Pins ureq 2.x semantics that justify the agent config: an overall
@@ -352,6 +437,7 @@ mod tests {
         match result {
             Ok(_) => {}
             Err(UpstreamError::Http(_)) => {}
+            Err(UpstreamError::HttpApi(_, _, _)) => {}
             Err(UpstreamError::Api(_, _)) => {}
             Err(other) => panic!("tls smoke failed: {other}"),
         }
