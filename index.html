@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>workbuddy-cpa · CodeBuddy 原生插件 for CLIProxyAPI</title>
+<meta name="description" content="把腾讯 CodeBuddy 封装成 CLIProxyAPI 的 Rust 原生插件：扫码登录、多账号管理、每日签到、额度面板，OpenAI / Anthropic 协议直通。">
+<style>
+  :root{
+    --bg:#0f1115; --surface:#161a21; --surface-2:#1c212a; --line:#262c37;
+    --fg:#e6e9ef; --muted:#9aa4b2; --faint:#6b7684;
+    --acc:#4ade80; --acc-dim:#22c55e; --blue:#60a5fa; --amber:#fbbf24;
+    --r:12px; --max:920px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--fg); line-height:1.7;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--blue); text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:var(--max); margin:0 auto; padding:0 24px}
+
+  header{padding:72px 0 56px; border-bottom:1px solid var(--line)}
+  .eyebrow{
+    display:inline-flex; align-items:center; gap:8px; font-size:12px; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--acc); border:1px solid rgba(74,222,128,.3);
+    background:rgba(74,222,128,.08); padding:5px 12px; border-radius:999px; margin-bottom:22px;
+  }
+  .eyebrow::before{content:""; width:6px; height:6px; border-radius:50%; background:var(--acc)}
+  h1{font-size:clamp(30px,5.2vw,46px); line-height:1.15; margin:0 0 16px; letter-spacing:-.02em; font-weight:700}
+  h1 .thin{font-weight:400; color:var(--muted)}
+  .lede{font-size:clamp(15px,2vw,18px); color:var(--muted); max-width:64ch; margin:0 0 28px}
+  .cta{display:flex; flex-wrap:wrap; gap:12px; margin-bottom:20px}
+  .btn{
+    display:inline-flex; align-items:center; gap:7px; padding:11px 20px; border-radius:var(--r);
+    font-size:14px; font-weight:600; border:1px solid var(--line); background:var(--surface); color:var(--fg);
+    transition:border-color .15s, background .15s, transform .15s;
+  }
+  .btn:hover{border-color:var(--faint); text-decoration:none; transform:translateY(-1px)}
+  .btn.primary{background:var(--acc); border-color:var(--acc); color:#08130c}
+  .btn.primary:hover{background:var(--acc-dim); border-color:var(--acc-dim)}
+  .meta{font-size:13px; color:var(--faint); display:flex; flex-wrap:wrap; gap:8px 18px}
+
+  section{padding:56px 0; border-bottom:1px solid var(--line)}
+  section:last-of-type{border-bottom:none}
+  h2{font-size:24px; margin:0 0 8px; letter-spacing:-.01em; font-weight:650}
+  h2 .zh{color:var(--muted); font-weight:400; font-size:15px; margin-left:10px}
+  .sec-sub{color:var(--muted); font-size:14.5px; margin:0 0 28px; max-width:68ch}
+
+  .grid{display:grid; gap:14px}
+  .grid.c2{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+  .grid.c3{grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
+  .card{
+    background:var(--surface); border:1px solid var(--line); border-radius:var(--r);
+    padding:18px 20px;
+  }
+  .card h3{margin:0 0 7px; font-size:15px; font-weight:620; display:flex; align-items:center; gap:8px}
+  .card h3 .dot{width:6px; height:6px; border-radius:50%; background:var(--acc); flex:none}
+  .card p{margin:0; color:var(--muted); font-size:14px}
+  .card code{font-size:12.5px}
+
+  pre{
+    background:var(--surface); border:1px solid var(--line); border-radius:var(--r);
+    padding:16px 18px; overflow-x:auto; font-size:13px; line-height:1.65;
+    font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace; color:#d6dae2;
+  }
+  code{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace; font-size:.92em}
+  p code,li code,.card code{
+    background:var(--surface-2); border:1px solid var(--line); padding:1.5px 6px; border-radius:5px; color:#c3d0e0;
+  }
+  .filelabel{font-size:12.5px; color:var(--faint); margin:0 0 8px; font-family:ui-monospace,Menlo,monospace}
+
+  table{width:100%; border-collapse:collapse; font-size:14px; margin:0 0 8px}
+  th,td{text-align:left; padding:10px 14px; border-bottom:1px solid var(--line); vertical-align:top}
+  th{color:var(--muted); font-weight:600; font-size:12.5px; text-transform:uppercase; letter-spacing:.05em}
+  td code{font-size:12.5px}
+
+  ul{color:var(--muted); padding-left:20px; margin:0}
+  li{margin:7px 0}
+  li strong{color:var(--fg); font-weight:600}
+
+  .note{
+    background:rgba(96,165,250,.07); border:1px solid rgba(96,165,250,.22);
+    border-left-width:3px; border-radius:var(--r); padding:15px 18px; margin:20px 0;
+    font-size:14px; color:var(--muted);
+  }
+  .note strong{color:var(--fg)}
+  .warn{
+    background:rgba(251,191,36,.07); border:1px solid rgba(251,191,36,.22);
+    border-left-width:3px; border-radius:var(--r); padding:15px 18px; margin:20px 0;
+    font-size:14px; color:var(--muted);
+  }
+  .warn strong{color:var(--fg)}
+
+  .models{display:flex; flex-wrap:wrap; gap:8px; margin:0}
+  .models span{
+    background:var(--surface-2); border:1px solid var(--line); border-radius:8px;
+    padding:6px 13px; font-size:13px; font-family:ui-monospace,Menlo,monospace; color:#c3d0e0;
+  }
+
+  footer{padding:36px 0 56px; color:var(--faint); font-size:13px; display:flex; flex-wrap:wrap; gap:10px 22px; justify-content:space-between}
+
+  @media (max-width:640px){
+    header{padding:48px 0 40px}
+    section{padding:40px 0}
+    .wrap{padding:0 18px}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <span class="eyebrow">CLIProxyAPI 原生插件</span>
+    <h1>workbuddy-cpa<br><span class="thin">腾讯 CodeBuddy 的 Rust 原生插件</span></h1>
+    <p class="lede">
+      把 CodeBuddy（copilot.tencent.com）封装成 CLIProxyAPI 的插件。任何支持 OpenAI / Anthropic 协议的客户端
+      ——Claude Code、Cursor、Cline、SDK——都能直接调用 CodeBuddy 背后的模型，并附带扫码登录、多账号管理、
+      每日签到与额度面板。
+    </p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/xinzengxx/workbuddy-cpa/releases">⬇ 下载 Release</a>
+      <a class="btn" href="https://github.com/xinzengxx/workbuddy-cpa">⌨ 查看源码</a>
+      <a class="btn" href="#install">📦 安装</a>
+    </div>
+    <div class="meta">
+      <span>版本 v0.3.6</span>
+      <span>Rust · C ABI v1 / RPC schema v3</span>
+      <span>macOS · Linux · Windows</span>
+      <span>MIT License</span>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <h2>为什么是 Rust<span class="zh">为什么不写成 Go 插件</span></h2>
+    <p class="sec-sub">
+      CPA 的 Go 插件要求宿主与插件共享包逐字节同源——CPA 每次升级都会让旧插件加载失败。
+      Rust 版只通过 C ABI 和 JSON RPC 契约与宿主交互，不依赖宿主的 Go 工具链和 SDK 版本，预编译产物下载即用。
+    </p>
+    <div class="grid c3">
+      <div class="card">
+        <h3><span class="dot"></span>版本免疫</h3>
+        <p>宿主升级不会让插件失效，只要 C ABI 与 RPC 契约不变就不需要跟进重编。</p>
+      </div>
+      <div class="card">
+        <h3><span class="dot"></span>跨平台预编译</h3>
+        <p>macOS / Linux / Windows 六个架构的 Release 产物，下载解压即可放进插件目录。</p>
+      </div>
+      <div class="card">
+        <h3><span class="dot"></span>轻量宿主</h3>
+        <p>纯 C ABI 边界，不链接宿主 SDK，不受 CPA Go 版本升级影响。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>功能<span class="zh">面板里能做什么</span></h2>
+    <p class="sec-sub">所有账号操作都在 CPA 管理面板内完成，凭据生命周期交还宿主接口。</p>
+    <div class="grid c2">
+      <div class="card">
+        <h3><span class="dot"></span>扫码登录 / token 刷新</h3>
+        <p>完全走 CodeBuddy 插件协议；默认凭据 <code>workbuddy.json</code>，多账号各自落在独立文件 <code>workbuddy-{uid后6位}.json</code>。</p>
+      </div>
+      <div class="card">
+        <h3><span class="dot"></span>多账号管理</h3>
+        <p>面板内「＋ 添加账号」（扫码 / 授权链接 + 轮询落盘）、卡片徽章一键启停、悬停 ✕ 删除。</p>
+      </div>
+      <div class="card">
+        <h3><span class="dot"></span>手动批量签到</h3>
+        <p>「每日签到」卡片一键给所有凭据领取签到积分（同 uid 去重，停用账号也签）。签到按北京时间重置，插件不常驻定时器。</p>
+      </div>
+      <div class="card">
+        <h3><span class="dot"></span>chat 执行</h3>
+        <p>OpenAI chat-completions 输入输出；非流式请求自动转上游流式再聚合；跨格式入口（Anthropic 等）自动补 SSE 帧。</p>
+      </div>
+      <div class="card">
+        <h3><span class="dot"></span>额度面板（三区）</h3>
+        <p>账号列表（剩余率进度条 + 最早到期 + 启停徽章）、最近 10 条调用、自绘下拉菜单查看套餐级明细表。</p>
+      </div>
+      <div class="card">
+        <h3><span class="dot"></span>配置驱动模型列表</h3>
+        <p><code>config.yaml</code> 中改模型列表热生效，无需重编、无需重启。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>模型<span class="zh">内置默认表</span></h2>
+    <p class="sec-sub">
+      本插件现在<strong>只提供 GLM 系列</strong>，避免 CPA 把 DeepSeek / Kimi / Hy3 / MiniMax 的请求路由到 WorkBuddy。
+      配置里的 <code>models:</code> 只能新增或调整 <code>glm-*</code> 条目，非 GLM 条目会被忽略，executor 也会拒绝非 GLM 模型。
+    </p>
+    <div class="models">
+      <span>glm-5.1</span><span>glm-5.2</span><span>glm-5.3</span><span>glm-5.3-flash</span><span>glm-5v-turbo</span>
+    </div>
+    <div class="note">
+      DeepSeek 请走 <strong>Qoder CN 插件</strong>（<code>qoderwork</code>）。
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <h2>安装<span class="zh">三选一</span></h2>
+    <p class="sec-sub">前置：运行中的 CLIProxyAPI（带 CGO / 插件支持，v7.2.x ~ v8.x 实测可用）。</p>
+
+    <h3 style="font-size:15px;margin:0 0 8px">方式一 · Release 下载（推荐）</h3>
+    <p class="filelabel">从 Releases 下载对应平台 zip，解压出 workbuddy-cpa.dylib / .so / .dll</p>
+    <pre><code>macOS : workbuddy-cpa_0.3.6_darwin_arm64.zip  /  _darwin_amd64.zip
+Linux : workbuddy-cpa_0.3.6_linux_amd64.zip   /  _linux_arm64.zip
+Windows: workbuddy-cpa_0.3.6_windows_amd64.zip /  _windows_arm64.zip</code></pre>
+    <div class="warn">
+      <strong>升级时先删后放</strong>（<code>rm workbuddy-cpa.dylib &amp;&amp; cp ...</code>，或先拷到临时名再 <code>mv</code> 覆盖）。
+      直接原地覆盖一个正被运行中的 CPA 映射的 <code>.dylib</code>，会让 macOS 判定该文件代码签名失效，
+      之后任何 <code>dlopen</code> 它的进程都会被 SIGKILL。万一中招，<code>codesign --force --sign - workbuddy-cpa.dylib</code> 能救回来。
+    </div>
+
+    <h3 style="font-size:15px;margin:26px 0 8px">方式二 · 源码编译</h3>
+    <pre><code>git clone https://github.com/xinzengxx/workbuddy-cpa
+cd workbuddy-cpa
+cargo build --release
+
+rm -f ~/.cli-proxy-api/plugins/workbuddy-cpa.dylib
+cp target/release/libworkbuddy.dylib ~/.cli-proxy-api/plugins/workbuddy-cpa.dylib   # macOS
+cp target/release/libworkbuddy.so    ~/.cli-proxy-api/plugins/workbuddy-cpa.so      # Linux
+cp target/release/workbuddy.dll      &lt;CPA插件目录&gt;/workbuddy-cpa.dll             # Windows</code></pre>
+
+    <h3 style="font-size:15px;margin:26px 0 8px">方式三 · 启用（首次安装必做）</h3>
+    <p class="sec-sub" style="margin-bottom:12px">
+      CPA 对插件默认全部禁用：全局 <code>plugins.enabled</code> 缺省 <code>false</code>，且 <code>configs</code> 里没有条目的插件一律不加载。
+      <code>configs</code> 的键必须与插件文件名（去扩展名）一致，即 <code>workbuddy-cpa</code>。
+    </p>
+    <pre><code>plugins:
+  enabled: true
+  dir: "~/.cli-proxy-api/plugins"     # brew launchd 服务必须用绝对路径
+  configs:
+    workbuddy-cpa: { enabled: true, priority: 100 }</code></pre>
+    <div class="note">
+      或者更简单：重启后在 CPA 管理面板 → 插件页，对 workbuddy-cpa 点<strong>启用</strong>（自动写入配置并热加载，无需重启）。<br>
+      成功标志：日志出现 <code>plugin registered plugin_id=workbuddy-cpa version=0.3.x</code>。
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>使用<span class="zh">接入方式</span></h2>
+    <p class="sec-sub">CPA 默认端口 <code>8317</code>，API key 见 <code>config.yaml</code> 的 <code>api-keys</code>。</p>
+    <table>
+      <thead><tr><th>协议</th><th>Base URL</th></tr></thead>
+      <tbody>
+        <tr><td>OpenAI</td><td><code>http://&lt;host&gt;:8317/v1</code></td></tr>
+        <tr><td>Anthropic</td><td><code>http://&lt;host&gt;:8317</code>（不带 <code>/v1</code>，走 <code>x-api-key</code>）</td></tr>
+      </tbody>
+    </table>
+
+    <h3 style="font-size:15px;margin:26px 0 8px">自定义模型列表</h3>
+    <pre><code>plugins:
+  enabled: true
+  configs:
+    workbuddy-cpa:
+      enabled: true
+      models:
+        - id: glm-5.3-flash
+          name: "GLM-5.3 Flash"
+          context: 1000000
+        - id: kimi-k3            # 新模型上线后加一行即可</code></pre>
+    <p class="sec-sub">保存后 CPA 热加载（<code>plugin.reconfigure</code>），无需重启或重编。</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>面板 API<span class="zh">额度与账号管理</span></h2>
+    <p class="sec-sub">面板：CPA 管理界面 → WorkBuddy 菜单。</p>
+    <table>
+      <thead><tr><th>操作</th><th>位置</th><th>实现</th></tr></thead>
+      <tbody>
+        <tr><td>查看额度 / 套餐明细</td><td>面板两区</td><td><code>GET /v0/management/plugins/workbuddy/accounts</code></td></tr>
+        <tr><td>批量签到</td><td>面板「每日签到」</td><td><code>GET .../checkin</code> 查状态；<code>POST .../checkin</code> 领取</td></tr>
+        <tr><td>添加账号</td><td>面板「＋ 添加账号」</td><td><code>GET .../login/start</code> → <code>POST .../login/poll</code></td></tr>
+        <tr><td>启用 / 停用账号</td><td>卡片徽章点击</td><td>宿主 <code>PATCH /v0/management/auth-files/status</code></td></tr>
+        <tr><td>删除账号</td><td>卡片右上 ✕</td><td>宿主 <code>DELETE /v0/management/auth-files</code></td></tr>
+      </tbody>
+    </table>
+    <div class="note">
+      <strong>为什么启停 / 删除不走插件自己的接口</strong>：实测（CPA v7.2.130）<code>host.auth.save</code> 不会持久化 <code>disabled</code> 字段的改写，
+      且删掉凭据文件后宿主内存里仍保留该凭据——两者都必须由宿主自己的 auth-files 接口完成。
+      插件因此只负责模型 / 执行 / 额度，凭据生命周期完全交还宿主。
+    </div>
+    <div class="note">
+      <strong>签到是手动触发</strong>：插件不启动后台定时器，打开面板点一次「批量签到」即可。
+      访问 token 过期时会用 refresh token 自动刷新并原子写回凭据文件；
+      <code>daily-checkin</code> 返回 <code>code=10001</code>（即使外层是 HTTP 400）按「今日已签」处理。
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>兼容性</h2>
+    <table>
+      <thead><tr><th>宿主 CPA</th><th>本插件</th></tr></thead>
+      <tbody>
+        <tr><td>≥ v7.2.x（C ABI v1 / RPC schema v3）</td><td>v0.2.0+</td></tr>
+        <tr><td>≥ v7.2.130（<code>/v0/management/auth-files</code> 启停与删除）</td><td>v0.3.0+（需多账号管理时）</td></tr>
+      </tbody>
+    </table>
+    <p class="sec-sub" style="margin-top:18px">
+      宿主升级通常无需任何操作；仅当 CPA 变更 C ABI 或 RPC 契约时才需要跟进。
+      已知限制：CPA v7.2.130 不会调用插件声明的 <code>scheduler.pick</code> 钩子，多账号由宿主内置 round-robin 轮转。
+    </p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap" style="width:100%;display:flex;flex-wrap:wrap;gap:10px 22px;justify-content:space-between">
+    <span>workbuddy-cpa · MIT License</span>
+    <span>
+      <a href="https://github.com/xinzengxx/workbuddy-cpa">GitHub</a> ·
+      <a href="https://github.com/router-for-me/CLIProxyAPI">CLIProxyAPI</a> ·
+      <a href="https://github.com/lovingfish/workbuddy-cliproxy">Go 版前身</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>
