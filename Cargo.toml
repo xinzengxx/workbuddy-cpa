@@ -7,6 +7,12 @@ edition = "2021"
 crate-type = ["cdylib"]
 name = "workbuddy"
 
+[features]
+default = []
+# Builds the international (Global realm) plugin: upstream www.workbuddy.ai,
+# provider "workbuddy-intl", single model deepseek-v4.1-flash. See src/realm.rs.
+intl = []
+
 [dependencies]
 ureq = { version = "2", features = ["json", "cookies"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }

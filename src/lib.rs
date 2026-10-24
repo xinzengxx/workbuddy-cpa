@@ -7,6 +7,7 @@ pub mod management;
 pub mod dispatch;
 pub mod models;
 pub mod recent;
+pub mod realm;
 pub mod rpc;
 pub mod scheduler;
 pub mod state;
