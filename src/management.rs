@@ -127,10 +127,12 @@ pub fn handle(method: &str, path: &str, query: &str, body_b64: &str) -> MgmtResp
         ("POST", p) if p == format!("{base}/refresh") => {
             json_response(200, build_accounts_dashboard())
         }
-        ("GET", p) if p == format!("{base}/checkin") => {
+        // Declaring no route is not enough: the host forwards management calls
+        // by path prefix, so a realm without the campaign must refuse here too.
+        ("GET", p) if realm().checkin && p == format!("{base}/checkin") => {
             json_response(200, crate::checkin::status_all())
         }
-        ("POST", p) if p == format!("{base}/checkin") => {
+        ("POST", p) if realm().checkin && p == format!("{base}/checkin") => {
             json_response(200, crate::checkin::run_all())
         }
         ("GET", p) if p == format!("{base}/login/start") => json_response(200, handle_login_start()),
@@ -493,6 +495,16 @@ mod tests {
         )));
         assert!(body.contains(&format!("<title>{}</title>", realm().panel_title)));
         assert!(body.contains(r#"id="checkinCard""#), "card markup stays; JS decides visibility");
+        // The markup alone proves nothing: without these gates the card renders
+        // (and polls) on a realm that has no check-in campaign.
+        assert!(
+            body.contains(r#"(CHECKIN_ENABLED?checkinCard():"")"#),
+            "check-in card must be behind CHECKIN_ENABLED"
+        );
+        assert!(
+            body.contains("if(CHECKIN_ENABLED) await loadCheckin();"),
+            "check-in polling must be behind CHECKIN_ENABLED"
+        );
         assert!(body.contains(&format!("const CHECKIN_ENABLED = {};", realm().checkin)));
     }
 
@@ -662,11 +674,13 @@ mod tests {
         let path = format!("/plugins/{p}/checkin");
         assert_eq!(reg.routes.iter().any(|r| r.method == "GET" && r.path == path), realm().checkin);
         assert_eq!(reg.routes.iter().any(|r| r.method == "POST" && r.path == path), realm().checkin);
-        if !realm().checkin {
-            return; // Global realm has no check-in campaign at all
-        }
+        // Declaring no route is not enough: the host forwards by path prefix, so
+        // the handler itself must refuse the call on a realm without check-in.
         let resp = handle("GET", &format!("/v0/management/plugins/{p}/checkin"), "", "");
-        assert_eq!(resp.status_code, 200);
+        assert_eq!(resp.status_code, if realm().checkin { 200 } else { 404 });
+        if !realm().checkin {
+            return;
+        }
         let v: serde_json::Value =
             serde_json::from_str(&String::from_utf8(b64_decode(&resp.body)).unwrap()).unwrap();
         assert!(v["accounts"].is_array(), "checkin status must return an accounts array");

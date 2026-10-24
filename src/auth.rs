@@ -195,7 +195,7 @@ fn credential_belongs_to_realm(raw: &[u8], req_file_name: &str, sa: &StoredAuth)
                 .map(str::to_string)
         });
     if let Some(t) = declared {
-        return t == realm.credential_type;
+        return t.trim() == realm.credential_type;
     }
     let name = if req_file_name.trim().is_empty() {
         crate::rpc::credential_file_name(sa)
@@ -290,6 +290,17 @@ mod tests {
             "workbuddy-abcdef.json"
         };
         assert_eq!(parse_auth(&b64, foreign_name).handled, false);
+        let own_name = format!("{}abcdef.json", realm().credential_prefix);
+        assert_eq!(parse_auth(&b64, &own_name).handled, true);
+    }
+
+    #[test]
+    fn parse_auth_tolerates_whitespace_around_type() {
+        // The panel's row filter trims both sides; the parser must agree, or a
+        // hand-edited `"type": "workbuddy "` makes the account disappear.
+        let mut v = serde_json::to_value(sample_auth()).unwrap();
+        v["type"] = serde_json::json!(format!(" {} ", realm().credential_type));
+        let b64 = b64_encode(&serde_json::to_vec(&v).unwrap());
         let own_name = format!("{}abcdef.json", realm().credential_prefix);
         assert_eq!(parse_auth(&b64, &own_name).handled, true);
     }
