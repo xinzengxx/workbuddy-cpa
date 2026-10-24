@@ -81,6 +81,19 @@ fn html_response(body: &str) -> MgmtResponse {
     MgmtResponse { status_code: 200, headers, body: b64_encode(body.as_bytes()) }
 }
 
+/// The embedded panel with this realm's identity substituted in. The HTML is
+/// shared by both plugins, so every realm-specific string is a placeholder that
+/// is replaced here — serving it unsubstituted would point the panel at the
+/// other plugin's management routes.
+fn panel_html() -> String {
+    let r = realm();
+    PANEL_HTML
+        .replace("__WB_PROVIDER__", r.provider)
+        .replace("__WB_TITLE__", r.panel_title)
+        .replace("__WB_CRED_PREFIX__", r.credential_prefix)
+        .replace("__WB_CHECKIN__", if r.checkin { "true" } else { "false" })
+}
+
 /// Handle one management request. Paths arrive under /v0/management or
 /// /v0/resource; authentication is done by the host before dispatch.
 pub fn handle(method: &str, path: &str, query: &str, body_b64: &str) -> MgmtResponse {
@@ -100,7 +113,7 @@ pub fn handle(method: &str, path: &str, query: &str, body_b64: &str) -> MgmtResp
             None => String::new(), // exactly /v0/resource/plugins/<id>
         };
         return match sub.as_str() {
-            "" | "/" | "/panel" | "/panel.html" => html_response(PANEL_HTML),
+            "" | "/" | "/panel" | "/panel.html" => html_response(&panel_html()),
             _ => json_response(404, serde_json::json!({"error": "not found"})),
         };
     }
@@ -469,6 +482,26 @@ pub(crate) fn host_auth_get(auth_index: &str) -> Result<Vec<u8>, String> {
 mod tests {
 
     use super::*;
+
+    #[test]
+    fn served_panel_has_no_placeholders_and_targets_realm() {
+        let body = panel_html();
+        assert!(!body.contains("__WB_"), "placeholder leaked into the served panel");
+        assert!(body.contains(&format!(
+            r#"const API = "/v0/management/plugins/{}""#,
+            realm().provider
+        )));
+        assert!(body.contains(&format!("<title>{}</title>", realm().panel_title)));
+        assert!(body.contains(r#"id="checkinCard""#), "card markup stays; JS decides visibility");
+        assert!(body.contains(&format!("const CHECKIN_ENABLED = {};", realm().checkin)));
+    }
+
+    #[test]
+    fn panel_keeps_host_credential_lifecycle_wiring() {
+        let body = panel_html();
+        assert!(body.contains(r#"const HOSTFL = "/v0/management/auth-files""#));
+        assert!(body.contains("HOSTFL+\"/status\""));
+    }
 
     #[test]
     fn routes_follow_realm_provider() {

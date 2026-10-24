@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>WorkBuddy</title>
+<title>__WB_TITLE__</title>
 <style>
 /* ── token layer ─────────────────────────────────────────────── */
 :root{
@@ -195,7 +195,7 @@ dialog::backdrop{background:rgba(4,6,9,.55)}
 </head>
 <body>
 <header class="hdr">
-  <h1><i class="mark" aria-hidden="true"></i>WorkBuddy<span class="tag">CPA 插件面板</span></h1>
+  <h1><i class="mark" aria-hidden="true"></i>__WB_TITLE__<span class="tag">CPA 插件面板</span></h1>
   <p class="meta" id="hdrMeta">正在加载…</p>
 </header>
 <div id="authBox" class="card">
@@ -234,7 +234,9 @@ dialog::backdrop{background:rgba(4,6,9,.55)}
   </div>
 </dialog>
 <script>
-const API = "/v0/management/plugins/workbuddy";
+const API = "/v0/management/plugins/__WB_PROVIDER__";
+const CRED_PREFIX = "__WB_CRED_PREFIX__";
+const CHECKIN_ENABLED = __WB_CHECKIN__;
 /* Credential lifecycle (enable/disable, delete) belongs to the host, which owns
    the auth files. host.auth.save can NOT persist a `disabled` rewrite, so the
    panel talks to the host's own auth-files endpoints (same ones its own UI uses). */
@@ -279,7 +281,7 @@ let DATA=null, SELECTED=null, RECENT=[], CHECKIN=null, CHECKIN_RUNNING=false;
 let CHECKIN_ERRORS={}, CHECKIN_MSG="", CHECKIN_MSG_OK=true;
 
 function accDisplayName(acc){
-  return acc.nickname || (acc.name||"").replace(/^workbuddy-/,"").replace(/\.json$/,"") || "账号";
+  return acc.nickname || (acc.name||"").replace(new RegExp("^"+CRED_PREFIX),"").replace(/\.json$/,"") || "账号";
 }
 function rateColor(pct){return pct<=20?"var(--err)":pct<=50?"var(--warn)":"var(--ok)"}
 
@@ -324,7 +326,7 @@ function render(){
   if(!accounts.length){hdrMeta.textContent="0 个账号";
     el.innerHTML=zone1Title()+'<div class="empty">'+
       '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>'+
-      '<div>暂无 workbuddy 凭据</div><div class="dim">添加账号后即可查看额度与用量</div>'+
+      '<div>暂无 __WB_PROVIDER__ 凭据</div><div class="dim">添加账号后即可查看额度与用量</div>'+
       '<button class="btn" onclick="addAccount()">＋ 添加账号</button></div>';
     return}
   if(!SELECTED || !accounts.find(a=>a.auth_index===SELECTED)) SELECTED=accounts[0].auth_index;
@@ -377,7 +379,7 @@ function render(){
       '<div class="tablewrap"><table><tr><th>套餐</th><th>开始时间</th><th>到期时间</th><th>剩余天数</th><th style="text-align:right">剩余额度</th></tr>'+rows+'</table>'+(moreBtn||"")+'</div>';
   }
   el.innerHTML=
-    checkinCard()+
+    (CHECKIN_ENABLED?checkinCard():"")+
     zone1Title()+
     '<div class="cards">'+cards+'</div>'+
     '<div class="sec-title"><span class="sec-label"><i class="zn">②</i>最近调用<span class="sec-hint">最近 10 条 · CodeBuddy 不提供按次积分，以 token 计</span></span>'+
@@ -391,7 +393,7 @@ function render(){
 function expandRows(btn){document.querySelectorAll('.xrow').forEach(r=>r.style.display='table-row');btn.remove()}
 
 /* 每日签到：只做手动批量签到，不常驻、不自动触发。
-   GET 刷新今日状态；POST 给所有 workbuddy 凭据（含停用）签到。 */
+   GET 刷新今日状态；POST 给所有 __WB_PROVIDER__ 凭据（含停用）签到。 */
 function checkinCard(){
   let inner;
   const rows=(CHECKIN&&CHECKIN.accounts)||[];
@@ -401,7 +403,7 @@ function checkinCard(){
   }else if(CHECKIN.error){
     inner='<div class="ck-msg err">'+esc(CHECKIN.error)+'</div>';
   }else if(!rows.length){
-    inner='<div class="ck-msg">暂无 workbuddy 凭据</div>';
+    inner='<div class="ck-msg">暂无 __WB_PROVIDER__ 凭据</div>';
   }else{
     const signed=rows.filter(r=>r.today_checked_in===true).length;
     const maxStreak=Math.max(0,...rows.map(r=>r.streak_days||0));
@@ -436,7 +438,7 @@ function checkinCard(){
     : '<button class="btn btn-solid" onclick="runCheckin()">批量签到</button>';
   const msgCls=CHECKIN_MSG?(CHECKIN_MSG_OK?"ok":"err"):"";
   return '<div class="ck" id="checkinCard"><div class="ck-head"><div><div class="ck-title">每日签到</div>'+
-    '<div class="ck-sub">手动批量签到 · 所有 workbuddy 凭据（含停用）</div></div>'+btn+'</div>'+
+    '<div class="ck-sub">手动批量签到 · 所有 __WB_PROVIDER__ 凭据（含停用）</div></div>'+btn+'</div>'+
     '<div class="ck-msg '+msgCls+'" id="checkinMsg">'+esc(CHECKIN_MSG)+'</div>'+inner+'</div>';
 }
 
@@ -484,7 +486,7 @@ function recentTable(){
   const rows=calls.map(c=>{
     const t=new Date((c.ts||0)*1000);
     const time=isNaN(t)?"—":t.toLocaleTimeString("zh-CN",{hour12:false});
-    const acct=esc(c.nickname||"")+' <span class="dim">'+esc(String(c.auth_id||"").replace(/^workbuddy-/,""))+'</span>';
+    const acct=esc(c.nickname||"")+' <span class="dim">'+esc(String(c.auth_id||"").replace(new RegExp("^"+CRED_PREFIX),""))+'</span>';
     const model=esc(c.model||"")+(c.stream?' <span class="dim">流式</span>':'');
     const status=c.ok?'<span class="badge ok">成功</span>':'<span class="badge err" title="'+esc(String(c.error||"").slice(0,200))+'">失败</span>';
     const split=(c.total_tokens>0&&c.total_tokens!==undefined)?('<span class="dim">'+fmtNum(c.prompt_tokens||0)+' / </span>'+fmtNum(c.completion_tokens||0)):'<span class="dim">—</span>';
@@ -523,7 +525,7 @@ async function load(keepCheckinState){
     DATA=await ra.json();
     try{const d=await rr.json();RECENT=(d&&d.calls)||[]}catch(e){RECENT=[]}
     render();
-    await loadCheckin();
+    if(CHECKIN_ENABLED) await loadCheckin();
   }catch(e){
     let hint="";
     if(location.protocol==="file:")hint="面板当前以文件方式打开，访问不到 CPA 管理接口。请编译并部署插件后，从 CPA 管理界面打开本面板。";
