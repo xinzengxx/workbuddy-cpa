@@ -60,7 +60,7 @@ pub fn start_login() -> Result<AuthLoginStartResponse, String> {
         m.insert(state.clone(), LoginCtx { agent, expires_at });
     });
     Ok(AuthLoginStartResponse {
-        provider: "workbuddy".into(),
+        provider: crate::realm::realm().provider.into(),
         url: auth_url,
         state,
         expires_at: rfc3339_now_plus(LOGIN_TTL_SECS),
@@ -173,6 +173,38 @@ fn state_agent(state: &str) -> Result<ureq::Agent, String> {
     Ok(ctx.agent.clone())
 }
 
+/// auth.parse: recognize this realm's credentials among auth files on disk.
+///
+/// The host asks EVERY auth provider about EVERY credential file, so a naive
+/// "does it deserialize" check makes the CN plugin claim international files
+/// (and vice versa). An explicit `type`/`provider` field is authoritative;
+/// otherwise the on-disk name decides.
+fn credential_belongs_to_realm(raw: &[u8], req_file_name: &str, sa: &StoredAuth) -> bool {
+    let realm = crate::realm::realm();
+    let declared = serde_json::from_slice::<serde_json::Value>(raw)
+        .ok()
+        .and_then(|v| {
+            v.get("type")
+                .and_then(|t| t.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| {
+                    v.get("provider")
+                        .and_then(|t| t.as_str())
+                        .filter(|s| !s.trim().is_empty())
+                })
+                .map(str::to_string)
+        });
+    if let Some(t) = declared {
+        return t == realm.credential_type;
+    }
+    let name = if req_file_name.trim().is_empty() {
+        crate::rpc::credential_file_name(sa)
+    } else {
+        req_file_name.trim().to_string()
+    };
+    realm.owns_credential_file(&name)
+}
+
 /// auth.parse: recognize workbuddy credentials among auth files on disk.
 pub fn parse_auth(raw_json_b64: &str, req_file_name: &str) -> AuthParseResponse {
     let raw = crate::rpc::b64_decode(raw_json_b64);
@@ -183,7 +215,7 @@ pub fn parse_auth(raw_json_b64: &str, req_file_name: &str) -> AuthParseResponse 
         Ok(v) => v,
         Err(_) => return AuthParseResponse { handled: false, auth: None },
     };
-    if sa.auth.access_token.is_empty() {
+    if sa.auth.access_token.is_empty() || !credential_belongs_to_realm(&raw, req_file_name, &sa) {
         return AuthParseResponse { handled: false, auth: None };
     }
     // Prefer the host-provided file name (the on-disk name); fall back to the
@@ -227,7 +259,47 @@ pub fn refresh(storage_json_b64: &str) -> Result<AuthRefreshResponse, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::realm::realm;
     use crate::rpc::b64_encode;
+
+    fn sample_auth() -> StoredAuth {
+        StoredAuth {
+            auth: StoredTokens {
+                access_token: "tok".into(),
+                refresh_token: "r".into(),
+                expires_at: 9,
+                domain: "d".into(),
+            },
+            account: StoredAccount {
+                uid: "u".into(),
+                enterprise_id: "".into(),
+                nickname: "n".into(),
+            },
+        }
+    }
+
+    #[test]
+    fn parse_auth_rejects_foreign_credential_file() {
+        let b64 = b64_encode(&serde_json::to_vec(&sample_auth()).unwrap());
+        let foreign_name = if realm().provider == "workbuddy" {
+            "workbuddy-intl-abcdef.json"
+        } else {
+            "workbuddy-abcdef.json"
+        };
+        assert_eq!(parse_auth(&b64, foreign_name).handled, false);
+        let own_name = format!("{}abcdef.json", realm().credential_prefix);
+        assert_eq!(parse_auth(&b64, &own_name).handled, true);
+    }
+
+    #[test]
+    fn parse_auth_honours_explicit_type_over_file_name() {
+        let mut v = serde_json::to_value(sample_auth()).unwrap();
+        let foreign_type = if realm().provider == "workbuddy" { "workbuddy-intl" } else { "workbuddy" };
+        v["type"] = serde_json::json!(foreign_type);
+        let b64 = b64_encode(&serde_json::to_vec(&v).unwrap());
+        let own_name = format!("{}abcdef.json", realm().credential_prefix);
+        assert_eq!(parse_auth(&b64, &own_name).handled, false);
+    }
 
     #[test]
     fn poll_unknown_state_errors() {

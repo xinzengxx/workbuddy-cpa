@@ -328,9 +328,10 @@ pub struct AccountData {
 /// name), so repeated QR scans are idempotent. Empty uid falls back to the
 /// legacy shared name.
 pub fn credential_file_name(sa: &StoredAuth) -> String {
+    let realm = crate::realm::realm();
     let uid = sa.account.uid.trim();
     if uid.is_empty() {
-        return "workbuddy.json".into();
+        return realm.legacy_file_name();
     }
     let chars: Vec<char> = uid.chars().collect();
     let tail: String = if chars.len() >= 6 {
@@ -338,20 +339,21 @@ pub fn credential_file_name(sa: &StoredAuth) -> String {
     } else {
         uid.to_string()
     };
-    format!("workbuddy-{tail}.json")
+    format!("{}{tail}.json", realm.credential_prefix)
 }
 
 pub fn auth_data_from_stored(sa: &StoredAuth, file_name: &str) -> AuthData {
+    let realm = crate::realm::realm();
     // Per-account unique ID: the host dedupes auth records by AuthData.ID, so
     // a constant ID would collapse every account into one record.
     let id = file_name.trim_end_matches(".json").to_string();
     AuthData {
-        provider: "workbuddy".into(),
+        provider: realm.provider.into(),
         id,
         file_name: file_name.into(),
-        label: "WorkBuddy".into(),
+        label: realm.panel_title.into(),
         storage_json: b64_encode(&serde_json::to_vec(sa).unwrap_or_default()),
-        metadata: serde_json::json!({"type": "workbuddy"}),
+        metadata: serde_json::json!({"type": realm.credential_type}),
     }
 }
 
@@ -425,11 +427,17 @@ mod tests {
             auth: StoredTokens { access_token: "a".into(), refresh_token: "r".into(), expires_at: 1, domain: "d".into() },
             account: StoredAccount { uid: String::new(), enterprise_id: String::new(), nickname: String::new() },
         };
-        assert_eq!(credential_file_name(&sa), "workbuddy.json");
+        assert_eq!(credential_file_name(&sa), crate::realm::realm().legacy_file_name());
         sa.account.uid = "3a417abcdef".into();
-        assert_eq!(credential_file_name(&sa), "workbuddy-abcdef.json");
+        assert_eq!(
+            credential_file_name(&sa),
+            format!("{}abcdef.json", crate::realm::realm().credential_prefix)
+        );
         sa.account.uid = "abc".into();
-        assert_eq!(credential_file_name(&sa), "workbuddy-abc.json");
+        assert_eq!(
+            credential_file_name(&sa),
+            format!("{}abc.json", crate::realm::realm().credential_prefix)
+        );
     }
 
     #[test]
