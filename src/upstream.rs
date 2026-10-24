@@ -2,10 +2,47 @@ use crate::rpc::StoredAuth;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-pub const UPSTREAM_BASE: &str = "https://copilot.tencent.com";
-pub const CLIENT_UA: &str = "CLI/2.63.2 CodeBuddy/2.63.2";
-pub const ORIGIN: &str = "https://www.codebuddy.cn";
-pub const REFERER: &str = "https://www.codebuddy.cn/";
+/// Upstream API base for this realm (CN: copilot.tencent.com, Global:
+/// www.workbuddy.ai). A Global JWT against the CN gateway is a 401, so the two
+/// realms must never share one base.
+pub fn base() -> &'static str {
+    crate::realm::realm().base
+}
+
+/// Web origin for this realm, used for the Origin/Referer headers.
+pub fn origin() -> &'static str {
+    crate::realm::realm().origin
+}
+
+/// CLI build advertised in the channel-verification headers. The Global gateway
+/// compares this string, so User-Agent and X-IDE-Version must stay in lockstep.
+pub const IDE_VERSION: &str = "2.63.2";
+
+pub fn client_ua() -> String {
+    format!("CLI/{IDE_VERSION} CodeBuddy/{IDE_VERSION}")
+}
+
+/// 32 lowercase hex chars, fresh per request.
+fn random_hex16() -> String {
+    let bytes: [u8; 16] = rand::random();
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// What the Global gateway calls "channel verification": without these the chat
+/// endpoint answers 11128 "request illegal". The CN gateway tolerates them, so
+/// both realms send the same set (same as the Go upstream).
+pub fn channel_header_set() -> HeaderSet {
+    HeaderSet(vec![
+        ("X-IDE-Type".into(), "CLI".into()),
+        ("X-IDE-Name".into(), "CLI".into()),
+        ("X-IDE-Version".into(), IDE_VERSION.into()),
+        ("X-Agent-Intent".into(), "craft".into()),
+        ("X-Request-ID".into(), random_hex16()),
+        ("X-Conversation-ID".into(), random_hex16()),
+        ("X-Conversation-Request-ID".into(), random_hex16()),
+        ("X-Conversation-Message-ID".into(), random_hex16()),
+    ])
+}
 
 pub const ENDPOINT_AUTH_STATE: &str = "/v2/plugin/auth/state?platform=CLI";
 pub const ENDPOINT_LOGIN_ACCT: &str = "/v2/plugin/login/account?state=";
@@ -139,9 +176,9 @@ pub fn common_header_set() -> HeaderSet {
         ("Content-Type".into(), "application/json".into()),
         ("Accept".into(), "application/json, text/plain, */*".into()),
         ("X-Requested-With".into(), "XMLHttpRequest".into()),
-        ("Origin".into(), ORIGIN.into()),
-        ("Referer".into(), format!("{ORIGIN}/")),
-        ("User-Agent".into(), CLIENT_UA.into()),
+        ("Origin".into(), origin().into()),
+        ("Referer".into(), format!("{}/", origin())),
+        ("User-Agent".into(), client_ua()),
     ])
 }
 
@@ -173,6 +210,7 @@ pub fn backend_header_set(sa: &StoredAuth) -> HeaderSet {
         hs.0.push(("X-No-Department-Info".into(), "1".into()));
     }
     hs.0.push(("X-Product".into(), "SaaS".into()));
+    hs.0.extend(channel_header_set().0);
     hs
 }
 
@@ -197,7 +235,7 @@ pub fn post_envelope_with_timeout(
     body: &str,
     timeout: Duration,
 ) -> Result<serde_json::Value, UpstreamError> {
-    let url = format!("{UPSTREAM_BASE}{path}");
+    let url = format!("{}{path}", base());
     let req = headers.apply_to(agent.post(&url).timeout(timeout));
     let resp = match req.send_string(body) {
         Ok(r) => r,
@@ -218,7 +256,7 @@ pub fn get_envelope(
     path: &str,
     headers: HeaderSet,
 ) -> Result<serde_json::Value, UpstreamError> {
-    let url = format!("{UPSTREAM_BASE}{path}");
+    let url = format!("{}{path}", base());
     let req = headers.apply_to(agent.get(&url).timeout(ENVELOPE_TIMEOUT));
     let resp = match req.call() {
         Ok(r) => r,
@@ -236,7 +274,51 @@ pub fn get_envelope(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::realm::realm;
     use crate::rpc::{StoredAccount, StoredTokens};
+
+    #[test]
+    fn backend_headers_carry_channel_verification() {
+        let hs = backend_header_set(&empty_account_stored_auth());
+        let get = |k: &str| hs.0.iter().find(|(hk, _)| hk == k).map(|(_, v)| v.clone());
+        assert_eq!(get("X-IDE-Type").as_deref(), Some("CLI"));
+        assert_eq!(get("X-IDE-Name").as_deref(), Some("CLI"));
+        assert_eq!(get("X-IDE-Version").as_deref(), Some(IDE_VERSION));
+        assert_eq!(get("X-Agent-Intent").as_deref(), Some("craft"));
+        for k in [
+            "X-Request-ID",
+            "X-Conversation-ID",
+            "X-Conversation-Request-ID",
+            "X-Conversation-Message-ID",
+        ] {
+            let v = get(k).unwrap_or_else(|| panic!("missing {k}"));
+            assert_eq!(v.len(), 32, "{k} must be 32 chars, got {v}");
+            assert!(
+                v.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+                "{k} must be lowercase hex"
+            );
+        }
+    }
+
+    #[test]
+    fn channel_request_ids_are_fresh_per_call() {
+        let rid = |hs: &HeaderSet| {
+            hs.0.iter()
+                .find(|(k, _)| k == "X-Request-ID")
+                .map(|(_, v)| v.clone())
+                .unwrap()
+        };
+        assert_ne!(
+            rid(&backend_header_set(&empty_account_stored_auth())),
+            rid(&backend_header_set(&empty_account_stored_auth()))
+        );
+    }
+
+    #[test]
+    fn base_and_origin_follow_realm() {
+        assert_eq!(base(), realm().base);
+        assert_eq!(origin(), realm().origin);
+    }
 
     fn empty_account_stored_auth() -> StoredAuth {
         StoredAuth {
@@ -290,8 +372,8 @@ mod tests {
     #[test]
     fn common_headers_carry_ua_and_origin() {
         let hs = common_header_set();
-        assert!(hs.0.iter().any(|(k, v)| k == "User-Agent" && v == CLIENT_UA));
-        assert!(hs.0.iter().any(|(k, v)| k == "Origin" && v == ORIGIN));
+        assert!(hs.0.iter().any(|(k, v)| k == "User-Agent" && v == &client_ua()));
+        assert!(hs.0.iter().any(|(k, v)| k == "Origin" && v == origin()));
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use crate::rpc::{ExecutorExecResponse, ExecutorStreamResponse, StoredAuth, StreamChunk};
-use crate::upstream::{backend_header_set, shared_agent, HeaderSet, ENDPOINT_CHAT, UPSTREAM_BASE};
+use crate::upstream::{backend_header_set, base, shared_agent, HeaderSet, ENDPOINT_CHAT};
 use serde_json::Value;
 use std::io::BufRead;
 
@@ -142,7 +142,8 @@ fn chat_headers(sa: &StoredAuth) -> HeaderSet {
 }
 
 fn post_chat(body: &[u8], sa: &StoredAuth) -> Result<ureq::Response, String> {
-    let req = chat_headers(sa).apply_to(shared_agent().post(&format!("{UPSTREAM_BASE}{ENDPOINT_CHAT}")));
+    let req = chat_headers(sa)
+        .apply_to(shared_agent().post(&format!("{}{ENDPOINT_CHAT}", base())));
     req.send_bytes(body).map_err(|e| match e {
         ureq::Error::Status(s, r) => {
             let detail = r

@@ -3,9 +3,9 @@ use crate::rpc::{
     AuthParseResponse, AuthRefreshResponse, StoredAccount, StoredAuth, StoredTokens, TokenData,
 };
 use crate::upstream::{
-    common_header_set, get_envelope, new_login_agent, post_envelope, shared_agent, HeaderSet,
-    ENDPOINT_AUTH_STATE, ENDPOINT_AUTH_TOKEN, ENDPOINT_LOGIN_ACCT, ENDPOINT_TOKEN_REFRESH,
-    CLIENT_UA, ORIGIN,
+    client_ua, common_header_set, get_envelope, new_login_agent, origin, post_envelope,
+    shared_agent, HeaderSet, ENDPOINT_AUTH_STATE, ENDPOINT_AUTH_TOKEN, ENDPOINT_LOGIN_ACCT,
+    ENDPOINT_TOKEN_REFRESH,
 };
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -150,9 +150,9 @@ fn fetch_account_once(state: &str, bearer: &str) -> Result<AccountData, String> 
     let hs = HeaderSet(vec![
         ("Content-Type".into(), "application/json".into()),
         ("Accept".into(), "application/json".into()),
-        ("User-Agent".into(), CLIENT_UA.into()),
-        ("Origin".into(), ORIGIN.into()),
-        ("Referer".into(), format!("{}/", ORIGIN)),
+        ("User-Agent".into(), client_ua()),
+        ("Origin".into(), origin().into()),
+        ("Referer".into(), format!("{}/", origin())),
         ("Authorization".into(), format!("Bearer {bearer}")),
     ]);
     let data = get_envelope(
