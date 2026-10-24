@@ -1,23 +1,20 @@
+use crate::realm::{model_allowed, realm};
 use crate::rpc::{Capabilities, Metadata, ModelInfo, Registration};
-
-pub const PROVIDER_NAME: &str = "workbuddy";
-
-/// Plugin (file) identity — must equal the dylib file name stem. It is
-/// deliberately DIFFERENT from the provider name: the plugin-store matches
-/// installed file IDs against registry entries, and the official registry's
-/// "workbuddy" slot belongs to someone else's plugin
-/// (zidanefaqih/codebuddy-intl-cpa) — that collision made the store show
-/// their repo and offer to "update" over our build. The provider /
-/// credential / model identity stays PROVIDER_NAME ("workbuddy"):
-/// auth.identifier, executor.identifier, model owned_by and the existing
-/// workbuddy-*.json credential files are all unaffected.
-pub const PLUGIN_ID: &str = "workbuddy-cpa";
 
 pub fn default_registration() -> Registration {
     Registration {
         schema_version: crate::SCHEMA_VERSION,
         metadata: Metadata {
-            name: PLUGIN_ID.into(),
+            // The plugin id must equal the dylib file name stem. It is
+            // deliberately DIFFERENT from the provider name: the plugin-store
+            // matches installed file IDs against registry entries, and the
+            // official registry's "workbuddy" slot belongs to someone else's
+            // plugin (zidanfaqih/codebuddy-intl-cpa) — that collision made the
+            // store show their repo and offer to "update" over our build. The
+            // provider / credential / model identity stays realm().provider:
+            // auth.identifier, executor.identifier, model owned_by and the
+            // credential files are all unaffected.
+            name: realm().plugin_id.into(),
             version: env!("CARGO_PKG_VERSION").into(),
             author: "xinyuan (Rust rewrite; original workbuddy plugin by Sliverkiss)".into(),
             // The host plugin-store card links exactly this URL (host reads
@@ -38,50 +35,42 @@ pub fn default_registration() -> Registration {
     }
 }
 
-/// GLM-only allowlist. WorkBuddy must not advertise DeepSeek/Kimi/Hy3/MiniMax:
-/// CPA routes by model id, so omitting those ids is what keeps their traffic
-/// from ever selecting a WorkBuddy credential.
-pub fn is_glm_model(id: &str) -> bool {
-    id.trim().to_ascii_lowercase().starts_with("glm-")
-}
-
 /// The host may pass "workbuddy/glm-5.2" or a bare id. Strip a provider prefix
-/// and reject anything outside the GLM family before an upstream request is made.
-pub fn require_glm_model(model: &str) -> Result<String, String> {
+/// and reject anything outside this realm's allowlist before an upstream
+/// request is made — CPA routes by model id, so a foreign id reaching us means
+/// the host picked the wrong credential.
+pub fn require_model(model: &str) -> Result<String, String> {
     let bare = model.rsplit('/').next().unwrap_or(model).trim();
     if bare.is_empty() {
         return Ok(String::new());
     }
-    if is_glm_model(bare) {
+    if model_allowed(bare) {
         Ok(bare.to_string())
     } else {
+        let ids: Vec<&str> = realm().models.iter().map(|m| m.id).collect();
         Err(format!(
-            "model_not_supported: workbuddy-cpa serves GLM models only (got {model})"
+            "model_not_supported: {} serves {} only (got {model})",
+            realm().provider,
+            ids.join(", ")
         ))
     }
 }
 
-/// Builtin model table is deliberately GLM-only. Config overrides (models: key
-/// in the plugin's config_yaml) may add or tune GLM entries, never other families.
+/// Builtin model table comes straight from the realm. Config overrides (the
+/// `models:` key) may tune or add entries, never leave the allowlist.
 pub fn builtin_models() -> Vec<ModelInfo> {
-    let specs: &[(&str, &str, i64)] = &[
-        ("glm-5.2", "GLM-5.2", 1_000_000),
-        ("glm-5.3-flash", "GLM-5.3 Flash", 1_000_000),
-        ("glm-5.1", "GLM-5.1", 131_072),
-        ("glm-5v-turbo", "GLM-5V Turbo", 131_072),
-        ("glm-5.3", "GLM-5.3", 131_072),
-    ];
-    specs
+    realm()
+        .models
         .iter()
-        .map(|(id, name, ctx)| ModelInfo {
-            id: id.to_string(),
+        .map(|spec| ModelInfo {
+            id: spec.id.to_string(),
             object: "model".into(),
-            owned_by: PROVIDER_NAME.into(),
-            display_name: name.to_string(),
-            name: id.to_string(),
+            owned_by: realm().provider.into(),
+            display_name: spec.display.to_string(),
+            name: spec.id.to_string(),
             methods: vec!["chat".into()],
-            context_length: *ctx,
-            max_completion_tokens: 8192,
+            context_length: spec.context,
+            max_completion_tokens: spec.max_completion,
             user_defined: true,
         })
         .collect()
@@ -97,9 +86,10 @@ struct ModelOverride {
 }
 
 /// Merge `models:` overrides from the plugin's config_yaml onto the builtin
-/// table: entries replace by id (context/name fields optional), new GLM ids
-/// append. Non-GLM entries are ignored so config cannot widen the allowlist.
-/// Unparsable config falls back to the base table (logged by the caller).
+/// table: entries replace by id (context/name fields optional), new ids append
+/// only when the realm allowlist accepts them. Foreign ids are ignored so
+/// config cannot widen the allowlist. Unparsable config falls back to the base
+/// table (logged by the caller).
 pub fn merge_model_overrides(base: Vec<ModelInfo>, config_yaml: &[u8]) -> Vec<ModelInfo> {
     let parsed: serde_yaml::Value = match serde_yaml::from_slice(config_yaml) {
         Ok(v) => v,
@@ -118,7 +108,7 @@ pub fn merge_model_overrides(base: Vec<ModelInfo>, config_yaml: &[u8]) -> Vec<Mo
     }
     let mut out = base;
     for ov in overrides {
-        if !is_glm_model(&ov.id) {
+        if !model_allowed(&ov.id) {
             continue;
         }
         if let Some(existing) = out.iter_mut().find(|m| m.id == ov.id) {
@@ -132,7 +122,7 @@ pub fn merge_model_overrides(base: Vec<ModelInfo>, config_yaml: &[u8]) -> Vec<Mo
             out.push(ModelInfo {
                 id: ov.id.clone(),
                 object: "model".into(),
-                owned_by: PROVIDER_NAME.into(),
+                owned_by: realm().provider.into(),
                 display_name: ov.name.unwrap_or_else(|| ov.id.clone()),
                 name: ov.id,
                 methods: vec!["chat".into()],
@@ -150,47 +140,49 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registration_repo_points_at_this_repo() {
-        // The plugin-store card links whatever GitHubRepository the
-        // registration metadata carries. The value used to be inherited from
-        // the Go upstream and pointed at someone else's repo — pin ours.
+    fn registration_identity_follows_realm() {
         let reg = default_registration();
         assert_eq!(reg.metadata.repo, "https://github.com/xinzengxx/workbuddy-cpa");
         assert_eq!(reg.metadata.version, env!("CARGO_PKG_VERSION"));
-        // Plugin id must differ from the registry-occupied "workbuddy" slot.
-        assert_eq!(reg.metadata.name, PLUGIN_ID);
-        assert_ne!(reg.metadata.name, PROVIDER_NAME);
+        assert_eq!(reg.metadata.name, realm().plugin_id);
+        assert_ne!(reg.metadata.name, realm().provider, "plugin id must differ from provider name");
         assert!(!reg.metadata.author.is_empty());
     }
 
     #[test]
-    fn builtin_models_are_glm_only() {
+    fn builtin_models_follow_realm() {
         let models = builtin_models();
-        assert_eq!(models.len(), 5);
-        assert!(models.iter().all(|m| is_glm_model(&m.id)));
-        assert!(models.iter().all(|m| m.owned_by == PROVIDER_NAME));
+        assert_eq!(models.len(), realm().models.len());
+        for (m, spec) in models.iter().zip(realm().models) {
+            assert_eq!(m.id, spec.id);
+            assert_eq!(m.context_length, spec.context);
+            assert_eq!(m.max_completion_tokens, spec.max_completion);
+            assert_eq!(m.owned_by, realm().provider);
+        }
     }
 
     #[test]
-    fn require_glm_model_strips_prefix_and_rejects_other_families() {
-        assert_eq!(require_glm_model("glm-5.2").unwrap(), "glm-5.2");
-        assert_eq!(require_glm_model("workbuddy/glm-5.3").unwrap(), "glm-5.3");
-        assert_eq!(require_glm_model("").unwrap(), "");
-        assert!(require_glm_model("deepseek-v4-pro").is_err());
-        assert!(require_glm_model("kimi-k3").is_err());
+    fn require_model_strips_prefix_and_rejects_foreign_family() {
+        let id = realm().models[0].id;
+        assert_eq!(require_model(id).unwrap(), id);
+        assert_eq!(require_model(&format!("{}/{}", realm().provider, id)).unwrap(), id);
+        assert_eq!(require_model("").unwrap(), "");
+        let foreign = if realm().provider == "workbuddy" { "deepseek-v4.1-flash" } else { "glm-5.2" };
+        assert!(require_model(foreign).is_err());
     }
 
     #[test]
-    fn merge_override_replaces_context_and_appends_new_glm() {
+    fn overrides_tune_own_models_and_ignore_foreign() {
         let base = builtin_models();
-        let yaml = b"enabled: true\npriority: 100\nmodels:\n  - id: glm-5.3-flash\n    context: 2000000\n  - id: glm-5.4\n    name: GLM 5.4\n  - id: kimi-k3\n    name: Kimi K3\n";
-        let merged = merge_model_overrides(base, yaml);
-        let f = merged.iter().find(|m| m.id == "glm-5.3-flash").unwrap();
-        assert_eq!(f.context_length, 2_000_000);
-        let new = merged.iter().find(|m| m.id == "glm-5.4").unwrap();
-        assert_eq!(new.display_name, "GLM 5.4");
-        assert!(!merged.iter().any(|m| m.id == "kimi-k3"), "non-GLM override must be ignored");
-        assert_eq!(merged.len(), 6);
+        let own = realm().models[0].id;
+        let foreign = if realm().provider == "workbuddy" { "deepseek-v4.1-flash" } else { "glm-5.2" };
+        let yaml = format!(
+            "enabled: true\nmodels:\n  - id: {own}\n    context: 2000000\n  - id: {foreign}\n    name: Nope\n"
+        );
+        let merged = merge_model_overrides(base.clone(), yaml.as_bytes());
+        assert_eq!(merged.len(), base.len(), "foreign override must be ignored");
+        assert_eq!(merged[0].context_length, 2_000_000);
+        assert_eq!(merged[0].owned_by, realm().provider);
     }
 
     #[test]
