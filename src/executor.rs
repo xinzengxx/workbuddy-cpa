@@ -1,3 +1,4 @@
+use crate::realm::realm;
 use crate::rpc::{ExecutorExecResponse, ExecutorStreamResponse, StoredAuth, StreamChunk};
 use crate::upstream::{backend_header_set, base, shared_agent, HeaderSet, ENDPOINT_CHAT};
 use serde_json::Value;
@@ -67,6 +68,9 @@ fn sanitize_object(obj: &mut Value) -> bool {
             }
         }
     }
+    if ensure_system_message(obj) {
+        changed = true;
+    }
     let model = obj["model"].as_str().unwrap_or("").to_string();
     if model.starts_with("hy3") {
         let eff = obj["reasoning_effort"].as_str().unwrap_or("");
@@ -76,6 +80,32 @@ fn sanitize_object(obj: &mut Value) -> bool {
         }
     }
     changed
+}
+
+/// The Global gateway rejects a request whose FIRST message is not a system
+/// prompt (code 11128 "first message is not system prompt"). Inject a minimal
+/// one when the client sent none. CN neither needs nor gets this, so its
+/// request bodies stay byte-identical.
+fn ensure_system_message(obj: &mut Value) -> bool {
+    if !realm().inject_system {
+        return false;
+    }
+    let messages = match obj["messages"].as_array_mut() {
+        Some(m) if !m.is_empty() => m,
+        _ => return false,
+    };
+    let first_is_system = messages[0]["role"]
+        .as_str()
+        .map(|r| r.eq_ignore_ascii_case("system"))
+        .unwrap_or(false);
+    if first_is_system {
+        return false;
+    }
+    messages.insert(
+        0,
+        serde_json::json!({"role": "system", "content": "You are a helpful assistant."}),
+    );
+    true
 }
 
 /// Force stream:true, apply prompt rewrites, re-serialize. Unparsable input
@@ -495,7 +525,7 @@ pub fn aggregate_completion<R: BufRead>(reader: R, model: &str) -> Result<Vec<u8
             .unwrap_or(0);
     }
     let mut result = serde_json::json!({
-        "id": if resp_id.is_empty() { "chatcmpl-workbuddy".to_string() } else { resp_id },
+        "id": if resp_id.is_empty() { realm().completion_prefix.to_string() } else { resp_id },
         "object": "chat.completion",
         "created": created,
         "model": if resp_model.is_empty() { model.to_string() } else { resp_model },
@@ -514,6 +544,41 @@ pub fn aggregate_completion<R: BufRead>(reader: R, model: &str) -> Result<Vec<u8
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::realm::realm;
+
+    #[test]
+    fn system_message_injection_follows_realm() {
+        let out = sanitize_request(
+            b"{\"model\":\"x\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}",
+        );
+        let v: Value = serde_json::from_slice(&out).unwrap();
+        let msgs = v["messages"].as_array().unwrap();
+        if realm().inject_system {
+            assert_eq!(msgs.len(), 2);
+            assert_eq!(msgs[0]["role"], "system");
+            assert_eq!(msgs[0]["content"], "You are a helpful assistant.");
+        } else {
+            assert_eq!(msgs.len(), 1);
+            assert_eq!(msgs[0]["role"], "user");
+        }
+    }
+
+    #[test]
+    fn existing_system_message_is_not_duplicated() {
+        let body = b"{\"model\":\"x\",\"messages\":[{\"role\":\"system\",\"content\":\"keep me\"},{\"role\":\"user\",\"content\":\"hi\"}]}";
+        let out = sanitize_request(body);
+        let v: Value = serde_json::from_slice(&out).unwrap();
+        let msgs = v["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0]["content"], "keep me");
+    }
+
+    #[test]
+    fn empty_messages_are_left_alone() {
+        let out = sanitize_request(b"{\"model\":\"x\",\"messages\":[]}");
+        let v: Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(v["messages"].as_array().unwrap().len(), 0);
+    }
 
     #[test]
     fn sanitize_forces_stream_true() {

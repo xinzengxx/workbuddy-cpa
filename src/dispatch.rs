@@ -1,5 +1,6 @@
 use crate::executor::{execute, execute_stream, ExecReq};
 use crate::models::{builtin_models, merge_model_overrides};
+use crate::realm::realm;
 use crate::rpc::{
     b64_decode, error_envelope, ok_envelope, AuthLoginStartResponse, AuthParseResponse,
     AuthRefreshResponse, AuthLoginPollResponse, ExecutorExecResponse, ExecutorStreamResponse,
@@ -40,11 +41,11 @@ pub fn handle(method: &str, request: &[u8]) -> Result<Vec<u8>, String> {
             ok_envelope(&crate::models::default_registration()).map_err(|e| e)
         }
         "model.static" | "model.for_auth" => {
-            let resp = ModelResponse { provider: "workbuddy".into(), models: current_models() };
+            let resp = ModelResponse { provider: realm().provider.into(), models: current_models() };
             ok_envelope(&resp).map_err(|e| e)
         }
         "auth.identifier" | "executor.identifier" => {
-            ok_envelope(&serde_json::json!({"Identifier": "workbuddy"})).map_err(|e| e)
+            ok_envelope(&serde_json::json!({"Identifier": realm().provider})).map_err(|e| e)
         }
         "auth.parse" => {
             let resp: AuthParseResponse = crate::auth::parse_auth(
@@ -164,6 +165,22 @@ fn decode_exec_req(req: &serde_json::Value, stream_id: &str) -> Result<ExecReq, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::realm::realm;
+
+    #[test]
+    fn model_static_and_identifiers_follow_realm() {
+        let raw = handle("model.static", b"{}").unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+        assert_eq!(v["result"]["Provider"], realm().provider);
+        assert!(v["result"]["Models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|m| m["OwnedBy"] == realm().provider));
+        let raw = handle("auth.identifier", b"{}").unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+        assert_eq!(v["result"]["Identifier"], realm().provider);
+    }
 
     #[test]
     fn unknown_method_returns_error_envelope_rc0() {
@@ -178,17 +195,19 @@ mod tests {
     fn model_static_lists_builtin() {
         let raw = handle("model.static", b"{}").unwrap();
         let v: serde_json::Value = serde_json::from_slice(&raw).unwrap();
-        assert_eq!(v["result"]["Provider"], "workbuddy");
+        assert_eq!(v["result"]["Provider"], realm().provider);
         let models = v["result"]["Models"].as_array().unwrap();
-        assert_eq!(models.len(), 5);
-        assert!(models.iter().any(|m| m["ID"] == "glm-5.3-flash"));
-        assert!(models.iter().all(|m| m["OwnedBy"] == "workbuddy"));
-        assert!(models.iter().all(|m| m["ID"].as_str().unwrap().starts_with("glm-")));
+        assert_eq!(models.len(), realm().models.len());
+        assert_eq!(models[0]["ID"], realm().models[0].id);
+        assert!(models.iter().all(|m| m["OwnedBy"] == realm().provider));
     }
 
     #[test]
     fn reconfigure_hot_reloads_models() {
-        let mut cfg = "models:\n  - id: glm-test-x\n    name: Test X\n".as_bytes().to_vec();
+        // Tune the first realm model's context: the allowlist is per-realm, so
+        // adding a brand-new id only works on CN and would fail on Global.
+        let own = realm().models[0].id;
+        let mut cfg = format!("models:\n  - id: {own}\n    context: 424242\n").into_bytes();
         use base64::Engine as _;
         let b64 = base64::engine::general_purpose::STANDARD.encode(&cfg);
         let body = serde_json::json!({"config_yaml": b64}).to_string();
@@ -197,7 +216,13 @@ mod tests {
         assert_eq!(v["result"]["capabilities"]["executor"], true);
         let raw = handle("model.static", b"{}").unwrap();
         let v: serde_json::Value = serde_json::from_slice(&raw).unwrap();
-        assert!(v["result"]["Models"].as_array().unwrap().iter().any(|m| m["ID"] == "glm-test-x"));
+        let tuned = v["result"]["Models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["ID"] == realm().models[0].id)
+            .expect("realm model must stay advertised");
+        assert_eq!(tuned["ContextLength"], 424242);
         // restore builtin table for other tests
         cfg.clear();
         let _ = cfg;

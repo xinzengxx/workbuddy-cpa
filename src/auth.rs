@@ -238,6 +238,9 @@ pub fn refresh(storage_json_b64: &str) -> Result<AuthRefreshResponse, String> {
     if !sa.account.enterprise_id.is_empty() {
         hs.0.push(("X-Enterprise-Id".into(), sa.account.enterprise_id.clone()));
     }
+    // Deliberately the same value in both realms: this header is an upstream
+    // client marker, not host-side isolation. Sending a new value risks the
+    // Global gateway rejecting refreshes an hour after a successful login.
     hs.0.push(("X-Auth-Refresh-Source".into(), "workbuddy".into()));
     let data = post_envelope(shared_agent(), ENDPOINT_TOKEN_REFRESH, hs, "{}")
         .map_err(|e| format!("refresh: {e}"))?;
