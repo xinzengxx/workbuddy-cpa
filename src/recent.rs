@@ -135,6 +135,16 @@ pub fn json() -> Value {
 mod tests {
     use super::*;
 
+    /// The call ring is a process-wide static, so tests that write to it race
+    /// each other under cargo's default parallelism (pre-existing flake: the
+    /// same suite passes single-threaded and fails randomly otherwise).
+    /// Serialize them instead of weakening the assertions.
+    static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn call(model: &str, ok: bool) -> Call {
         Call {
             ts: now(),
@@ -153,6 +163,7 @@ mod tests {
 
     #[test]
     fn ring_keeps_newest_ten() {
+        let _g = serial();
         for i in 0..13 {
             record(call(&format!("m{i}"), true));
         }
@@ -164,6 +175,7 @@ mod tests {
 
     #[test]
     fn record_call_extracts_usage() {
+        let _g = serial();
         record_call("a", "n", "glm-5.3-flash", true, true, "", 5, Some(&serde_json::json!({"total_tokens": 77, "prompt_tokens": 7, "completion_tokens": 70})));
         let snap = snapshot();
         assert_eq!(snap[0].total_tokens, 77);
@@ -192,6 +204,7 @@ mod tests {
 
     #[test]
     fn json_shape() {
+        let _g = serial();
         record(call("glm-5.3-flash", false));
         let v = json();
         let first = v["calls"][0].clone();
