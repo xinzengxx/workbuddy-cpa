@@ -27,6 +27,42 @@ CPA 的 Go 插件要求宿主与插件共享包**逐字节同源**——CPA 每�
 
 DeepSeek 请走 Qoder CN 插件（`qoderwork`）。配置里的 `models:` 覆盖只能新增/调整 `glm-*` 条目，非 GLM 条目会被忽略；executor 也会拒绝非 GLM 模型。
 
+## 国际版（Global realm）
+
+同一份源码还编译出第二个插件 **`workbuddy-intl-cpa`**，对接腾讯 CodeBuddy 国际版
+（`www.workbuddy.ai`），**只提供 `deepseek-v4.1-flash` 一个模型**，与国内版插件**可以同时安装、同时使用**：
+
+| | 国内版 | 国际版 |
+|---|---|---|
+| 插件文件（= 插件 ID） | `workbuddy-cpa` | `workbuddy-intl-cpa` |
+| 上游 | `copilot.tencent.com` | `www.workbuddy.ai` |
+| 模型 | GLM 系列（5 个） | `deepseek-v4.1-flash` |
+| 凭据文件 | `workbuddy-{uid后6位}.json` | `workbuddy-intl-{uid后6位}.json` |
+| 管理接口 | `/v0/management/plugins/workbuddy/*` | `/v0/management/plugins/workbuddy-intl/*` |
+| 面板菜单 | WorkBuddy | WorkBuddy 国际版 |
+| 每日签到 | 有 | 无（国际版没有该活动） |
+
+安装：下载 `workbuddy-intl-cpa_<版本>_<平台>.zip`，解压出 `workbuddy-intl-cpa.dylib`
+（Linux `.so` / Windows `.dll`）放进同一插件目录，然后**两个插件都要在配置里启用**：
+
+```yaml
+plugins:
+  enabled: true
+  dir: "~/.cli-proxy-api/plugins"
+  configs:
+    workbuddy-cpa:      { enabled: true, priority: 100 }
+    workbuddy-intl-cpa: { enabled: true, priority: 100 }
+```
+
+两个插件的凭据、状态文件、管理路由、面板全部隔离，互不可见。
+
+> **同名模型注意**：`deepseek-v4.1-flash` 与 `qoder` / `qoderwork` 插件报的模型名相同，
+> CPA 按模型 id 路由，三个插件同时提供同一个 id 时只会选中其中一个。要稳定走国际版，
+> 请把另外两个插件停用（或在 CPA 里用 alias/excluded-models 调停）。
+
+从源码构建：`cargo build --release`（国内版）与 `cargo build --release --features intl`（国际版），
+两次产物同名 `libworkbuddy.dylib`，打包时必须分别改名成 `workbuddy-cpa` / `workbuddy-intl-cpa`。
+
 ## 安装
 
 **前置**：运行中的 CLIProxyAPI（带 CGO / 插件支持，v7.2.x ~ v8.x 实测可用）。
@@ -37,7 +73,7 @@ DeepSeek 请走 Qoder CN 插件（`qoderwork`）。配置里的 `models:` 覆盖
 
 ### 方式一：Release 下载（推荐）
 
-从 [Releases](../../releases) 下载对应平台 zip（macOS：`workbuddy-cpa_0.3.6_darwin_arm64.zip` / `_darwin_amd64.zip`；Linux：`_linux_amd64.zip` / `_linux_arm64.zip`；Windows：`_windows_amd64.zip` / `_windows_arm64.zip`），解压出 `workbuddy-cpa.dylib`（Linux 为 `.so`，Windows 为 `.dll`），放入 CPA 插件目录。
+从 [Releases](../../releases) 下载对应平台 zip（macOS：`workbuddy-cpa_0.4.0_darwin_arm64.zip` / `_darwin_amd64.zip`；Linux：`_linux_amd64.zip` / `_linux_arm64.zip`；Windows：`_windows_amd64.zip` / `_windows_arm64.zip`），解压出 `workbuddy-cpa.dylib`（Linux 为 `.so`，Windows 为 `.dll`），放入 CPA 插件目录。
 
 > **升级时先删旧文件再放新文件**（`rm workbuddy-cpa.dylib && cp ...`，或 `cp` 到临时名再 `mv` 覆盖）。
 > 直接 `cp` 原地覆盖一个**正被运行中的 CPA 映射**的 `.dylib`，会让 macOS 判定该文件代码签名失效，

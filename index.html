@@ -140,7 +140,7 @@
       <a class="btn" href="#install">📦 安装</a>
     </div>
     <div class="meta">
-      <span>版本 v0.3.6</span>
+      <span>版本 v0.4.0</span>
       <span>Rust · C ABI v1 / RPC schema v3</span>
       <span>macOS · Linux · Windows</span>
       <span>MIT License</span>
@@ -209,14 +209,21 @@
   <div class="wrap">
     <h2>模型<span class="zh">内置默认表</span></h2>
     <p class="sec-sub">
-      本插件现在<strong>只提供 GLM 系列</strong>，避免 CPA 把 DeepSeek / Kimi / Hy3 / MiniMax 的请求路由到 WorkBuddy。
+      <strong>国内版只提供 GLM 系列</strong>，避免 CPA 把 DeepSeek / Kimi / Hy3 / MiniMax 的请求路由到 WorkBuddy。
       配置里的 <code>models:</code> 只能新增或调整 <code>glm-*</code> 条目，非 GLM 条目会被忽略，executor 也会拒绝非 GLM 模型。
     </p>
     <div class="models">
       <span>glm-5.1</span><span>glm-5.2</span><span>glm-5.3</span><span>glm-5.3-flash</span><span>glm-5v-turbo</span>
     </div>
+    <p class="sec-sub" style="margin-top:18px">
+      <strong>国际版</strong>（<code>workbuddy-intl-cpa</code>，上游 <code>www.workbuddy.ai</code>）只提供
+      <code>deepseek-v4.1-flash</code> 一个模型，可与国内版同时安装、同时使用。
+    </p>
+    <div class="models">
+      <span>deepseek-v4.1-flash</span>
+    </div>
     <div class="note">
-      DeepSeek 请走 <strong>Qoder CN 插件</strong>（<code>qoderwork</code>）。
+      国际版与 <strong>Qoder</strong> 插件报同一个模型 id，CPA 按 id 路由，要稳定走国际版请停用另一个。
     </div>
   </div>
 </section>
@@ -228,9 +235,10 @@
 
     <h3 style="font-size:15px;margin:0 0 8px">方式一 · Release 下载（推荐）</h3>
     <p class="filelabel">从 Releases 下载对应平台 zip，解压出 workbuddy-cpa.dylib / .so / .dll</p>
-    <pre><code>macOS : workbuddy-cpa_0.3.6_darwin_arm64.zip  /  _darwin_amd64.zip
-Linux : workbuddy-cpa_0.3.6_linux_amd64.zip   /  _linux_arm64.zip
-Windows: workbuddy-cpa_0.3.6_windows_amd64.zip /  _windows_arm64.zip</code></pre>
+    <pre><code>macOS : workbuddy-cpa_0.4.0_darwin_arm64.zip  /  _darwin_amd64.zip
+Linux : workbuddy-cpa_0.4.0_linux_amd64.zip   /  _linux_arm64.zip
+Windows: workbuddy-cpa_0.4.0_windows_amd64.zip /  _windows_arm64.zip
+国际版  : workbuddy-intl-cpa_0.4.0_&lt;平台&gt;.zip（只提供 deepseek-v4.1-flash）</code></pre>
     <div class="warn">
       <strong>升级时先删后放</strong>（<code>rm workbuddy-cpa.dylib &amp;&amp; cp ...</code>，或先拷到临时名再 <code>mv</code> 覆盖）。
       直接原地覆盖一个正被运行中的 CPA 映射的 <code>.dylib</code>，会让 macOS 判定该文件代码签名失效，

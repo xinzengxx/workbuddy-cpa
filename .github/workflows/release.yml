@@ -9,17 +9,37 @@ permissions:
   contents: write
 
 jobs:
+  # Both builds must be green before anything is packaged: the intl plugin is
+  # compiled from the same source, so a red `--features intl` run means the
+  # Global build is broken even when the CN one looks fine.
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test (CN)
+        run: cargo test
+      - name: Test (INTL)
+        run: cargo test --features intl
+
   build:
+    needs: test
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-14, target: aarch64-apple-darwin, goos: darwin, goarch: arm64, ext: dylib }
-          - { os: macos-15, target: x86_64-apple-darwin, goos: darwin, goarch: amd64, ext: dylib }
-          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, goos: linux, goarch: amd64, ext: so }
-          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, goos: linux, goarch: arm64, ext: so }
-          - { os: windows-2022, target: x86_64-pc-windows-msvc, goos: windows, goarch: amd64, ext: dll }
-          - { os: windows-2022, target: aarch64-pc-windows-msvc, goos: windows, goarch: arm64, ext: dll }
+          - { os: macos-14, target: aarch64-apple-darwin, goos: darwin, goarch: arm64, ext: dylib, features: "", plugin: workbuddy-cpa }
+          - { os: macos-15, target: x86_64-apple-darwin, goos: darwin, goarch: amd64, ext: dylib, features: "", plugin: workbuddy-cpa }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, goos: linux, goarch: amd64, ext: so, features: "", plugin: workbuddy-cpa }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, goos: linux, goarch: arm64, ext: so, features: "", plugin: workbuddy-cpa }
+          - { os: windows-2022, target: x86_64-pc-windows-msvc, goos: windows, goarch: amd64, ext: dll, features: "", plugin: workbuddy-cpa }
+          - { os: windows-2022, target: aarch64-pc-windows-msvc, goos: windows, goarch: arm64, ext: dll, features: "", plugin: workbuddy-cpa }
+          - { os: macos-14, target: aarch64-apple-darwin, goos: darwin, goarch: arm64, ext: dylib, features: "--features intl", plugin: workbuddy-intl-cpa }
+          - { os: macos-15, target: x86_64-apple-darwin, goos: darwin, goarch: amd64, ext: dylib, features: "--features intl", plugin: workbuddy-intl-cpa }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, goos: linux, goarch: amd64, ext: so, features: "--features intl", plugin: workbuddy-intl-cpa }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, goos: linux, goarch: arm64, ext: so, features: "--features intl", plugin: workbuddy-intl-cpa }
+          - { os: windows-2022, target: x86_64-pc-windows-msvc, goos: windows, goarch: amd64, ext: dll, features: "--features intl", plugin: workbuddy-intl-cpa }
+          - { os: windows-2022, target: aarch64-pc-windows-msvc, goos: windows, goarch: arm64, ext: dll, features: "--features intl", plugin: workbuddy-intl-cpa }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -29,7 +49,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }} ${{ matrix.features }}
 
       - name: Package (unix)
         if: runner.os != 'Windows'
@@ -37,14 +57,15 @@ jobs:
         run: |
           VER="${GITHUB_REF_NAME#v}"
           [ "$VER" = "$GITHUB_REF_NAME" ] && VER="manual-${GITHUB_SHA::7}"
-          # Zip name follows pluginstore.ArchiveName(PLUGIN_ID, ...): the
+          # Zip name follows pluginstore.ArchiveName(plugin_id, ...): the
           # plugin-store resolves release assets as {id}_{ver}_{goos}_{goarch}.zip.
-          ZIP="workbuddy-cpa_${VER}_${{ matrix.goos }}_${{ matrix.goarch }}.zip"
+          PLUGIN="${{ matrix.plugin }}"
+          ZIP="${PLUGIN}_${VER}_${{ matrix.goos }}_${{ matrix.goarch }}.zip"
           mkdir -p pkg
           SRC="target/${{ matrix.target }}/release/libworkbuddy.${{ matrix.ext }}"
           [ -f "$SRC" ] || SRC="target/${{ matrix.target }}/release/workbuddy.${{ matrix.ext }}"
           # The dylib file name (minus extension) IS the plugin id.
-          cp "$SRC" "pkg/workbuddy-cpa.${{ matrix.ext }}"
+          cp "$SRC" "pkg/${PLUGIN}.${{ matrix.ext }}"
           (cd pkg && zip "../$ZIP" *)
           echo "ZIP=$ZIP" >> "$GITHUB_ENV"
 
@@ -53,11 +74,12 @@ jobs:
         shell: pwsh
         run: |
           $VER = $env:GITHUB_REF_NAME -replace '^v',''
-          $ZIP = "workbuddy-cpa_${VER}_${{ matrix.goos }}_${{ matrix.goarch }}.zip"
+          $PLUGIN = "${{ matrix.plugin }}"
+          $ZIP = "${PLUGIN}_${VER}_${{ matrix.goos }}_${{ matrix.goarch }}.zip"
           New-Item -ItemType Directory -Force pkg | Out-Null
           $src = "target/${{ matrix.target }}/release/workbuddy.${{ matrix.ext }}"
           if (-not (Test-Path $src)) { $src = "target/${{ matrix.target }}/release/libworkbuddy.${{ matrix.ext }}" }
-          Copy-Item $src "pkg/workbuddy-cpa.${{ matrix.ext }}"
+          Copy-Item $src "pkg/${PLUGIN}.${{ matrix.ext }}"
           Compress-Archive -Path "pkg/*" -DestinationPath $ZIP
           "ZIP=$ZIP" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
 
@@ -76,10 +98,10 @@ jobs:
           merge-multiple: true
 
       - name: Checksums
-        run: sha256sum workbuddy-cpa_*.zip > checksums.txt
+        run: sha256sum *.zip > checksums.txt
 
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            workbuddy-cpa_*.zip
+            *.zip
             checksums.txt
