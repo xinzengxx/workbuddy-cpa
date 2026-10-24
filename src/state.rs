@@ -7,7 +7,7 @@ pub fn state_path() -> PathBuf {
         return PathBuf::from(p);
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join(".cli-proxy-api").join("workbuddy-state.json")
+    PathBuf::from(home).join(".cli-proxy-api").join(crate::realm::realm().state_file)
 }
 
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
@@ -43,4 +43,15 @@ pub fn set_disabled(auth_index: &str, disabled: bool) -> Result<(), String> {
     let tmp = state_path().with_extension("json.tmp");
     std::fs::write(&tmp, body.to_string()).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, state_path()).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::realm::realm;
+
+    #[test]
+    fn state_file_follows_realm() {
+        assert!(state_path().ends_with(realm().state_file));
+    }
 }

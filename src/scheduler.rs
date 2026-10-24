@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const PROVIDER: &str = "workbuddy";
 const CACHE_TTL_SECS: u64 = 60;
 /// Pseudo-quota for candidates whose quota is not yet known: they win the
 /// first pick so a real refresh gets triggered, then settle into weights.
@@ -141,7 +140,7 @@ pub struct StateView {
 pub fn candidates_filter_and_pick(cands: &[Cand], state: &StateView) -> Option<String> {
     let mut weighted: Vec<(String, i64)> = Vec::new();
     for c in cands {
-        if c.provider != PROVIDER {
+        if c.provider != crate::realm::realm().provider {
             continue;
         }
         if !c.status.is_empty() && c.status != "active" {
@@ -274,6 +273,11 @@ pub fn refresh_quota_sync(auth_index: &str, credits: &Value) {
 mod tests {
     use super::*;
 
+    /// Provider name of the realm under test (CN: workbuddy, Global: workbuddy-intl).
+    fn own() -> &'static str {
+        crate::realm::realm().provider
+    }
+
     fn cand(id: &str, provider: &str, status: &str) -> Cand {
         Cand { id: id.into(), provider: provider.into(), status: status.into() }
     }
@@ -302,7 +306,7 @@ mod tests {
         map_id("a2", "idx-a2");
         seed("idx-a1", 500);
         seed("idx-a2", 500);
-        let cands = vec![cand("a1", "workbuddy", "active"), cand("a2", "workbuddy", "active")];
+        let cands = vec![cand("a1", own(), "active"), cand("a2", own(), "active")];
         let st = state_with(vec!["a1".into()]);
         for _ in 0..50 {
             let picked = candidates_filter_and_pick(&cands, &st).unwrap();
@@ -316,7 +320,7 @@ mod tests {
         map_id("empty", "idx-empty");
         seed("idx-rich", 900);
         seed("idx-empty", 0);
-        let cands = vec![cand("rich", "workbuddy", "active"), cand("empty", "workbuddy", "active")];
+        let cands = vec![cand("rich", own(), "active"), cand("empty", own(), "active")];
         let st = state_with(vec![]);
         for _ in 0..30 {
             assert_eq!(candidates_filter_and_pick(&cands, &st).unwrap(), "rich");
@@ -329,7 +333,7 @@ mod tests {
         map_id("poor", "idx-poor");
         seed("idx-rich", 900);
         seed("idx-poor", 100);
-        let cands = vec![cand("rich", "workbuddy", "active"), cand("poor", "workbuddy", "active")];
+        let cands = vec![cand("rich", own(), "active"), cand("poor", own(), "active")];
         let st = state_with(vec![]);
         let mut rich = 0;
         for _ in 0..200 {
@@ -344,7 +348,7 @@ mod tests {
     fn all_exhausted_returns_none() {
         map_id("only", "idx-only");
         seed("idx-only", 0);
-        let cands = vec![cand("only", "workbuddy", "active")];
+        let cands = vec![cand("only", own(), "active")];
         assert!(candidates_filter_and_pick(&cands, &state_with(vec![])).is_none());
     }
 
@@ -370,7 +374,7 @@ mod tests {
     fn unmapped_id_still_pickable_as_unknown() {
         // No index mapping (host.auth.list unavailable in tests): the candidate
         // must stay pickable via the UNKNOWN_QUOTA path, never dropped.
-        let cands = vec![cand("nomap", "workbuddy", "active")];
+        let cands = vec![cand("nomap", own(), "active")];
         let st = state_with(vec![]);
         for _ in 0..10 {
             assert_eq!(candidates_filter_and_pick(&cands, &st).unwrap(), "nomap");
@@ -391,7 +395,7 @@ mod tests {
         // No cache entry for "fresh": beats a small known quota.
         map_id("small", "idx-small");
         seed("idx-small", 10);
-        let cands = vec![cand("small", "workbuddy", "active"), cand("fresh", "workbuddy", "active")];
+        let cands = vec![cand("small", own(), "active"), cand("fresh", own(), "active")];
         let st = state_with(vec![]);
         let mut fresh = 0;
         for _ in 0..20 {
@@ -405,9 +409,9 @@ mod tests {
     #[test]
     fn pick_shape_over_json() {
         let body = serde_json::json!({
-            "Provider": "workbuddy",
+            "Provider": own(),
             "Candidates": [
-                {"ID": "a1", "Provider": "workbuddy", "Status": "active"},
+                {"ID": "a1", "Provider": own(), "Status": "active"},
                 {"ID": "a2", "Provider": "codex", "Status": "active"}
             ]
         });

@@ -106,10 +106,11 @@ fn needs_refresh(expires_at: i64, now: i64) -> bool {
     expires_at <= now + 60
 }
 
-fn is_workbuddy_entry(provider: &str, ftype: &str, file_name: &str) -> bool {
-    provider == "workbuddy"
-        || ftype == "workbuddy"
-        || (provider.is_empty() && ftype.is_empty() && file_name.starts_with("workbuddy"))
+fn is_realm_entry(provider: &str, ftype: &str, file_name: &str) -> bool {
+    let r = crate::realm::realm();
+    provider == r.provider
+        || ftype == r.credential_type
+        || (provider.is_empty() && ftype.is_empty() && r.owns_credential_file(file_name))
 }
 
 fn account_key(sa: &StoredAuth, file_name: &str) -> String {
@@ -286,7 +287,7 @@ fn load_accounts() -> Result<Vec<AccountRow>, String> {
         let provider = str_field(f, "provider");
         let ftype = str_field(f, "type");
         let file_name = str_field(f, "name");
-        if !is_workbuddy_entry(&provider, &ftype, &file_name) {
+        if !is_realm_entry(&provider, &ftype, &file_name) {
             continue;
         }
         let auth_index = str_field(f, "auth_index");
@@ -521,6 +522,7 @@ fn run_all_inner() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::realm::realm;
     use crate::rpc::{StoredAccount, StoredTokens};
 
     fn stored(uid: &str) -> StoredAuth {
@@ -629,12 +631,16 @@ mod tests {
     }
 
     #[test]
-    fn workbuddy_entry_filter_accepts_provider_type_and_legacy_name() {
-        assert!(is_workbuddy_entry("workbuddy", "", "x.json"));
-        assert!(is_workbuddy_entry("", "workbuddy", "x.json"));
-        assert!(is_workbuddy_entry("", "", "workbuddy-abc.json"));
-        assert!(!is_workbuddy_entry("codex", "", "codex.json"));
-        assert!(!is_workbuddy_entry("", "", "qoderwork.json"));
+    fn realm_entry_filter_accepts_own_and_rejects_foreign() {
+        let p = realm().provider;
+        let t = realm().credential_type;
+        assert!(is_realm_entry(p, "", "x.json"));
+        assert!(is_realm_entry("", t, "x.json"));
+        assert!(is_realm_entry("", "", &format!("{}abcdef.json", realm().credential_prefix)));
+        let foreign = if p == "workbuddy" { "workbuddy-intl" } else { "workbuddy" };
+        assert!(!is_realm_entry(foreign, "", &format!("{}abcdef.json", realm().credential_prefix)));
+        assert!(!is_realm_entry("codex", "", "codex.json"));
+        assert!(!is_realm_entry("", "", "qoderwork.json"));
     }
 
     #[test]

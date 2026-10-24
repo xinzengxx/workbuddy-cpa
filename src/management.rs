@@ -1,3 +1,4 @@
+use crate::realm::realm;
 use crate::rpc::{b64_decode, b64_encode, ManagementRegistration, MgmtResponse};
 #[cfg(test)]
 use base64::Engine as _;
@@ -6,7 +7,6 @@ use std::collections::HashMap;
 use std::io::Write;
 
 pub const PANEL_HTML: &str = include_str!("../panel.html");
-pub const PROVIDER_NAME: &str = "workbuddy";
 
 /// Routes the plugin owns. Credential lifecycle (enable/disable, delete) is
 /// deliberately NOT here: the host owns it via
@@ -14,47 +14,52 @@ pub const PROVIDER_NAME: &str = "workbuddy";
 /// and `host.auth.save` provably does not persist a `disabled` rewrite
 /// (live-verified 2026-09-10). The panel calls those host endpoints directly.
 pub fn registration() -> ManagementRegistration {
+    let p = realm().provider;
+    let mut routes = vec![
+        crate::rpc::ManagementRoute {
+            method: "GET",
+            path: format!("/plugins/{p}/accounts"),
+            description: "List WorkBuddy accounts with plan, credits and cycle windows.".into(),
+        },
+        crate::rpc::ManagementRoute {
+            method: "POST",
+            path: format!("/plugins/{p}/refresh"),
+            description: "Force refresh credits for all accounts.".into(),
+        },
+        crate::rpc::ManagementRoute {
+            method: "GET",
+            path: format!("/plugins/{p}/recent"),
+            description: "Recent chat calls (last 10): account, model, token usage, status.".into(),
+        },
+        crate::rpc::ManagementRoute {
+            method: "GET",
+            path: format!("/plugins/{p}/login/start"),
+            description: "Start a login for an additional account; returns the authorization URL and state.".into(),
+        },
+        crate::rpc::ManagementRoute {
+            method: "POST",
+            path: format!("/plugins/{p}/login/poll"),
+            description: "Poll one login ({state}); on success the new credential is saved to its own file.".into(),
+        },
+    ];
+    // The daily check-in is a CN-only campaign; the Global realm has none.
+    if realm().checkin {
+        routes.push(crate::rpc::ManagementRoute {
+            method: "GET",
+            path: format!("/plugins/{p}/checkin"),
+            description: "Today's check-in status for all WorkBuddy accounts.".into(),
+        });
+        routes.push(crate::rpc::ManagementRoute {
+            method: "POST",
+            path: format!("/plugins/{p}/checkin"),
+            description: "Claim the daily check-in for all WorkBuddy accounts.".into(),
+        });
+    }
     ManagementRegistration {
-        routes: vec![
-            crate::rpc::ManagementRoute {
-                method: "GET",
-                path: "/plugins/workbuddy/accounts".into(),
-                description: "List WorkBuddy accounts with plan, credits and cycle windows.".into(),
-            },
-            crate::rpc::ManagementRoute {
-                method: "POST",
-                path: "/plugins/workbuddy/refresh".into(),
-                description: "Force refresh credits for all accounts.".into(),
-            },
-            crate::rpc::ManagementRoute {
-                method: "GET",
-                path: "/plugins/workbuddy/checkin".into(),
-                description: "Today's check-in status for all WorkBuddy accounts.".into(),
-            },
-            crate::rpc::ManagementRoute {
-                method: "POST",
-                path: "/plugins/workbuddy/checkin".into(),
-                description: "Claim the daily check-in for all WorkBuddy accounts.".into(),
-            },
-            crate::rpc::ManagementRoute {
-                method: "GET",
-                path: "/plugins/workbuddy/recent".into(),
-                description: "Recent chat calls (last 10): account, model, token usage, status.".into(),
-            },
-            crate::rpc::ManagementRoute {
-                method: "GET",
-                path: "/plugins/workbuddy/login/start".into(),
-                description: "Start a login for an additional account; returns the authorization URL and state.".into(),
-            },
-            crate::rpc::ManagementRoute {
-                method: "POST",
-                path: "/plugins/workbuddy/login/poll".into(),
-                description: "Poll one login ({state}); on success the new credential is saved to its own file.".into(),
-            },
-        ],
+        routes,
         resources: vec![crate::rpc::ResourceRoute {
             path: "/panel".into(),
-            menu: "WorkBuddy".into(),
+            menu: realm().panel_menu.into(),
             description: "WorkBuddy dashboard: credits, plan, cycle windows.".into(),
         }],
     }
@@ -100,7 +105,7 @@ pub fn handle(method: &str, path: &str, query: &str, body_b64: &str) -> MgmtResp
         };
     }
 
-    let base = format!("/v0/management/plugins/{PROVIDER_NAME}");
+    let base = format!("/v0/management/plugins/{}", realm().provider);
     match (method, path) {
         ("GET", p) if p == base || p == format!("{base}/accounts") => {
             json_response(200, build_accounts_dashboard())
@@ -303,7 +308,7 @@ pub(crate) fn write_credential_path(
             }
         }
     }
-    out.insert("type".into(), serde_json::json!("workbuddy"));
+    out.insert("type".into(), serde_json::json!(realm().credential_type));
     out.remove("provider");
 
     let body = serde_json::to_vec(&serde_json::Value::Object(out)).map_err(|e| e.to_string())?;
@@ -339,6 +344,24 @@ fn write_private_file(path: &std::path::Path, body: &[u8]) -> Result<(), String>
     Ok(())
 }
 
+/// Does one `host.auth.list` row belong to this realm?
+///
+/// An explicit provider/type wins. When both are empty (older host versions
+/// leave them blank) fall back to the on-disk name — without that fallback the
+/// old `if !provider.is_empty() && ...` test let every foreign account through,
+/// so the international panel would list CN/codex/qoder credentials and query
+/// their credits against the Global base.
+pub(crate) fn row_belongs_to_realm(f: &Value) -> bool {
+    let r = realm();
+    let provider = f.get("provider").and_then(|v| v.as_str()).unwrap_or("").trim();
+    let ftype = f.get("type").and_then(|v| v.as_str()).unwrap_or("").trim();
+    if !provider.is_empty() || !ftype.is_empty() {
+        return provider == r.provider || ftype == r.credential_type;
+    }
+    let name = f.get("name").and_then(|v| v.as_str()).unwrap_or("");
+    r.owns_credential_file(name)
+}
+
 /// List every workbuddy credential the host knows about and attach a fresh
 /// credits snapshot to each.
 fn build_accounts_dashboard() -> serde_json::Value {
@@ -356,9 +379,7 @@ fn build_accounts_dashboard() -> serde_json::Value {
     if let Some(list) = files.as_array() {
         for f in list {
             // HostAuthFileEntry uses snake_case json tags.
-            let provider = f.get("provider").and_then(|v| v.as_str()).unwrap_or("");
-            let ftype = f.get("type").and_then(|v| v.as_str()).unwrap_or("");
-            if !provider.is_empty() && provider != PROVIDER_NAME && ftype != PROVIDER_NAME {
+            if !row_belongs_to_realm(f) {
                 continue;
             }
             let auth_index = f
@@ -428,8 +449,7 @@ fn build_accounts_dashboard() -> serde_json::Value {
 
 /// `workbuddy-abcdef.json` -> `abcdef`; anything else keeps its stem.
 pub(crate) fn display_from_file(name: &str) -> String {
-    let stem = name.strip_suffix(".json").unwrap_or(name);
-    stem.strip_prefix("workbuddy-").unwrap_or(stem).to_string()
+    crate::realm::display_name_from_file(name)
 }
 
 pub(crate) fn host_auth_get(auth_index: &str) -> Result<Vec<u8>, String> {
@@ -451,22 +471,50 @@ mod tests {
     use super::*;
 
     #[test]
+    fn routes_follow_realm_provider() {
+        let reg = registration();
+        let p = realm().provider;
+        assert!(reg.routes.iter().any(|r| r.path == format!("/plugins/{p}/accounts")));
+        assert!(reg.routes.iter().all(|r| r.path.starts_with(&format!("/plugins/{p}/"))));
+        assert_eq!(reg.routes.iter().any(|r| r.path.ends_with("/checkin")), realm().checkin);
+        assert_eq!(reg.resources[0].menu, realm().panel_menu);
+    }
+
+    #[test]
+    fn dashboard_row_filter_is_realm_scoped() {
+        let rows = [
+            serde_json::json!({"provider": "", "type": "", "name": "workbuddy-intl-abc.json"}),
+            serde_json::json!({"provider": "", "type": "", "name": "workbuddy-abc.json"}),
+            serde_json::json!({"provider": "codex", "type": "codex", "name": "codex-x.json"}),
+        ];
+        let kept: Vec<&str> = rows
+            .iter()
+            .filter(|r| row_belongs_to_realm(r))
+            .map(|r| r["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(kept.len(), 1);
+        assert!(kept[0].starts_with(realm().credential_prefix));
+    }
+
+    #[test]
     fn registration_routes_shape() {
         let r = registration();
-        assert_eq!(r.routes[0].path, "/plugins/workbuddy/accounts");
+        let p = realm().provider;
+        assert_eq!(r.routes[0].path, format!("/plugins/{p}/accounts"));
         assert_eq!(r.routes[0].method, "GET");
         assert_eq!(r.routes[1].method, "POST");
-        assert_eq!(r.routes[1].path, "/plugins/workbuddy/refresh");
-        assert!(r.routes.iter().any(|x| x.path == "/plugins/workbuddy/login/start"));
-        assert!(r.routes.iter().any(|x| x.path == "/plugins/workbuddy/login/poll"));
-        assert!(r.routes.iter().any(|x| x.path == "/plugins/workbuddy/recent"));
-        assert_eq!(r.resources[0].menu, "WorkBuddy");
+        assert_eq!(r.routes[1].path, format!("/plugins/{p}/refresh"));
+        assert!(r.routes.iter().any(|x| x.path == format!("/plugins/{p}/login/start")));
+        assert!(r.routes.iter().any(|x| x.path == format!("/plugins/{p}/login/poll")));
+        assert!(r.routes.iter().any(|x| x.path == format!("/plugins/{p}/recent")));
+        assert_eq!(r.resources[0].menu, realm().panel_menu);
         assert_eq!(r.resources[0].path, "/panel");
     }
 
     #[test]
     fn recent_route_returns_calls_array() {
-        let resp = handle("GET", "/v0/management/plugins/workbuddy/recent", "", "");
+        let path = format!("/v0/management/plugins/{}/recent", realm().provider);
+        let resp = handle("GET", &path, "", "");
         assert_eq!(resp.status_code, 200);
         let v: serde_json::Value =
             serde_json::from_str(&String::from_utf8(b64_decode(&resp.body)).unwrap()).unwrap();
@@ -544,7 +592,7 @@ mod tests {
         assert_eq!(out["note"], "keep");
         assert_eq!(out["logo"], "x");
         assert_eq!(out["disabled"], true, "refresh must not re-enable a disabled account");
-        assert_eq!(out["type"], "workbuddy");
+        assert_eq!(out["type"], realm().credential_type);
         assert!(out.get("provider").is_none());
         #[cfg(unix)]
         {
@@ -577,15 +625,14 @@ mod tests {
     #[test]
     fn checkin_routes_are_declared_and_handled() {
         let reg = registration();
-        assert!(reg
-            .routes
-            .iter()
-            .any(|r| r.method == "GET" && r.path == "/plugins/workbuddy/checkin"));
-        assert!(reg
-            .routes
-            .iter()
-            .any(|r| r.method == "POST" && r.path == "/plugins/workbuddy/checkin"));
-        let resp = handle("GET", "/v0/management/plugins/workbuddy/checkin", "", "");
+        let p = realm().provider;
+        let path = format!("/plugins/{p}/checkin");
+        assert_eq!(reg.routes.iter().any(|r| r.method == "GET" && r.path == path), realm().checkin);
+        assert_eq!(reg.routes.iter().any(|r| r.method == "POST" && r.path == path), realm().checkin);
+        if !realm().checkin {
+            return; // Global realm has no check-in campaign at all
+        }
+        let resp = handle("GET", &format!("/v0/management/plugins/{p}/checkin"), "", "");
         assert_eq!(resp.status_code, 200);
         let v: serde_json::Value =
             serde_json::from_str(&String::from_utf8(b64_decode(&resp.body)).unwrap()).unwrap();
@@ -605,7 +652,7 @@ mod tests {
 
     #[test]
     fn login_poll_requires_state_from_body_or_query() {
-        let resp = handle("GET", "/v0/management/plugins/workbuddy/login/poll", "", "");
+        let resp = handle("GET", &format!("/v0/management/plugins/{}/login/poll", realm().provider), "", "");
         assert_eq!(resp.status_code, 200);
         let v: serde_json::Value =
             serde_json::from_str(&String::from_utf8(b64_decode(&resp.body)).unwrap()).unwrap();
@@ -614,7 +661,7 @@ mod tests {
 
         // Unknown state surfaces as an error status rather than a panic.
         let body = base64::engine::general_purpose::STANDARD.encode(br#"{"state":"nope"}"#);
-        let resp = handle("POST", "/v0/management/plugins/workbuddy/login/poll", "", &body);
+        let resp = handle("POST", &format!("/v0/management/plugins/{}/login/poll", realm().provider), "", &body);
         let v: serde_json::Value =
             serde_json::from_str(&String::from_utf8(b64_decode(&resp.body)).unwrap()).unwrap();
         assert_eq!(v["status"], "error");
@@ -629,8 +676,10 @@ mod tests {
 
     #[test]
     fn display_name_from_file_rules() {
-        assert_eq!(display_from_file("workbuddy-3a417a.json"), "3a417a");
-        assert_eq!(display_from_file("workbuddy.json"), "workbuddy");
+        let p = realm().credential_prefix;
+        assert_eq!(display_from_file(&format!("{p}3a417a.json")), "3a417a");
+        let legacy_stem = p.trim_end_matches('-');
+        assert_eq!(display_from_file(&format!("{legacy_stem}.json")), legacy_stem);
         assert_eq!(display_from_file("plain.json"), "plain");
     }
 
@@ -643,7 +692,7 @@ mod tests {
 
     #[test]
     fn mgmt_unknown_path_404() {
-        assert_eq!(handle("GET", "/v0/management/plugins/workbuddy/zzz", "", "").status_code, 404);
+        assert_eq!(handle("GET", &format!("/v0/management/plugins/{}/zzz", realm().provider), "", "").status_code, 404);
     }
 }
 
